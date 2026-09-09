@@ -1,0 +1,53 @@
+<!DOCTYPE CrossStudio_Session_File>
+<session>
+ <Bookmarks/>
+ <Breakpoints groups="Breakpoints" active_group="Breakpoints">
+  <Exceptions/>
+ </Breakpoints>
+ <ExecutionProfileWindow/>
+ <FrameBuffer/>
+ <Memory1/>
+ <Memory2/>
+ <Memory3/>
+ <Memory4/>
+ <Project>
+  <ProjectSessionItem path="bldc_foc"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;boards"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;boards;hpm6750evkmini"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;sdk_sample"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;sdk_sample;motor_ctrl"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;sdk_sample;motor_ctrl;bldc_foc"/>
+  <ProjectSessionItem path="bldc_foc;bldc_foc - hpm6750evkmini;sdk_sample;motor_ctrl;bldc_foc;src"/>
+ </Project>
+ <Register1/>
+ <Register2/>
+ <Register3/>
+ <Register4/>
+ <Threads>
+  <ThreadsWindow showLists=""/>
+ </Threads>
+ <TraceWindow>
+  <Trace enabled="Yes"/>
+ </TraceWindow>
+ <Watch1>
+  <Watches active="1" update="Never"/>
+ </Watch1>
+ <Watch2>
+  <Watches active="0" update="Never"/>
+ </Watch2>
+ <Watch3>
+  <Watches active="0" update="Never"/>
+ </Watch3>
+ <Watch4>
+  <Watches active="0" update="Never"/>
+ </Watch4>
+ <Files>
+  <SessionOpenFile windowGroup="DockEditLeft" x="13" y="1381" useTextEdit="1" path="../../src/bldc_foc.c" left="0" top="1352" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="0" y="658" useTextEdit="1" path="../../../../../boards/hpm6750evkmini/pinmux.c" left="0" selected="1" top="633" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="15" y="1410" useTextEdit="1" path="../../../../../boards/hpm6750evkmini/board.c" left="0" top="1382" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="76" y="174" useTextEdit="1" path="../../../../../boards/hpm6750evkmini/board.h" left="0" top="168" codecName="Default"/>
+  <SessionOpenFile windowGroup="DockEditLeft" x="45" y="481" useTextEdit="1" path="../../../../../soc/HPM6700/HPM6750/hpm_iomux.h" left="0" top="476" codecName="Default"/>
+ </Files>
+ <EMStudioWindow activeProject="bldc_foc - hpm6750evkmini" fileDialogDefaultFilter="*.c" autoConnectTarget="GDB Server" buildConfiguration="Debug" sessionSettings="" debugSearchFileMap="" fileDialogInitialDirectory="" debugSearchPath="" autoConnectCapabilities="1343"/>
+</session>
