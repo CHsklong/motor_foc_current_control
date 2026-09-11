@@ -1,0 +1,12 @@
+*.elf
+*.bin
+*.hex
+*.map
+*.asm
+*.o
+*.d
+build/
+Output/
+Debug/
+Release/
+*.emSession
