@@ -74,15 +74,15 @@
 #define SPEED_MAX              (40)
 #define PWM_FREQUENCY               (20000)    //PWM频率
 #define PWM_RELOAD                  ((motor_clock_hz/PWM_FREQUENCY) - 1)
-#define PWM_DEAD_AREA_TICK   (100)          //pwm死区时间（x/2*PWM输入时钟频率motor_clock_hz）
+#define PWM_DEAD_AREA_TICK   (50)          //pwm死区时间（x/2*PWM输入时钟频率motor_clock_hz）
 #define MOTOR0_BLDCPWM              BOARD_BLDCPWM
 #define MOTOR0_CURRENT_LOOP_BANDWIDTH (200)
 #define ADCU_INDEX 0
 #define ADCV_INDEX 1
 
 //模式切换
-#define SVPWM_MODE 0
-#define FOC_CURRENT_MODE 1
+#define SVPWM_MODE 1
+#define FOC_CURRENT_MODE 0
 #define USE_VIRTUAL_ANGLE 0
 #define motor_ban 0
 
