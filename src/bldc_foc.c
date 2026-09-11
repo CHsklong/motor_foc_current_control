@@ -74,15 +74,15 @@
 #define SPEED_MAX              (40)
 #define PWM_FREQUENCY               (20000)    //PWM频率
 #define PWM_RELOAD                  ((motor_clock_hz/PWM_FREQUENCY) - 1)
-#define PWM_DEAD_AREA_TICK   (100)          //pwm死区时间（x/2*PWM输入时钟频率motor_clock_hz）
+#define PWM_DEAD_AREA_TICK   (50)          //pwm死区时间（x/2*PWM输入时钟频率motor_clock_hz）
 #define MOTOR0_BLDCPWM              BOARD_BLDCPWM
 #define MOTOR0_CURRENT_LOOP_BANDWIDTH (200)
 #define ADCU_INDEX 0
 #define ADCV_INDEX 1
 
 //模式切换
-#define SVPWM_MODE 0
-#define FOC_CURRENT_MODE 1
+#define SVPWM_MODE 1
+#define FOC_CURRENT_MODE 0
 #define USE_VIRTUAL_ANGLE 0
 #define motor_ban 0
 
@@ -277,17 +277,17 @@ void motor_init(void)
     motor0.cfg.mcl.physical.board.pwm_dead_time_tick = PWM_DEAD_AREA_TICK;          //pwm死区时间（防止上下桥臂直通）
     motor0.cfg.mcl.physical.board.pwm_frequency = PWM_FREQUENCY;                    //pwm频率
     motor0.cfg.mcl.physical.board.pwm_reload = PWM_RELOAD;                          //pwm重载值
-    motor0.cfg.mcl.physical.motor.i_max = 9;                                        //电机最大电流（过流保护阈值）
-    motor0.cfg.mcl.physical.motor.inertia = 0.075;                                  //电机转动惯量（影响速度环相应）
-    motor0.cfg.mcl.physical.motor.ls = 0.00263;                                     //定子电感
-    motor0.cfg.mcl.physical.motor.pole_num = 4;                                     //电机极对数
-    motor0.cfg.mcl.physical.motor.power = 50;                                       //电机额定功率
-    motor0.cfg.mcl.physical.motor.res = 0.0011;                                     //定子电阻
-    motor0.cfg.mcl.physical.motor.rpm_max = 3500;                                   //电机最大转速
+    motor0.cfg.mcl.physical.motor.i_max = 3;                                       //电机最大电流（过流保护阈值；峰值转矩0.6N·m/Kt0.06=10A）
+    motor0.cfg.mcl.physical.motor.inertia = 6.2e-6;                                 //电机转动惯量 62g·cm^2=6.2e-6 kg·m^2（当前软件FOC路径未使用）
+    motor0.cfg.mcl.physical.motor.ls =  0.00127f;                                    //定子电感 1.27mH(线间)/2=0.635mH/Phase
+    motor0.cfg.mcl.physical.motor.pole_num = 4;                                     //电机极对数 8极/2=4
+    motor0.cfg.mcl.physical.motor.power = 63;                                       //电机额定功率 63W
+    motor0.cfg.mcl.physical.motor.res = 2.49f;                                      //定子电阻 2.49Ω(线间)/2=1.245Ω/Phase (20℃)
+    motor0.cfg.mcl.physical.motor.rpm_max = 3000;                                   //电机额定转速 3000r/min
     motor0.cfg.mcl.physical.motor.vbus = read_vbus();                                        //母线电压
-    motor0.cfg.mcl.physical.motor.flux = 0.0015;                                    //永磁体磁链
-    motor0.cfg.mcl.physical.motor.ld = 0.0026;                                      //d轴电感
-    motor0.cfg.mcl.physical.motor.lq = 0.0026;                                      //q轴电感
+    motor0.cfg.mcl.physical.motor.flux = 0.009;                                     //永磁体磁链 6.5V@1000r/min(线间)→0.009Wb
+    motor0.cfg.mcl.physical.motor.ld =  0.00127f;                                    //d轴电感 = 相电感（表贴式）
+    motor0.cfg.mcl.physical.motor.lq =  0.00127f;                                    //q轴电感 = 相电感（表贴式）
     motor0.cfg.mcl.physical.time.adc_sample_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);                  //ADC采样周期
     motor0.cfg.mcl.physical.time.current_loop_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);                //电流环周期
     motor0.cfg.mcl.physical.time.encoder_process_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);             //编码器处理周期
@@ -337,23 +337,42 @@ void motor_init(void)
     motor0.cfg.control.currentd_pid_cfg.cfg.integral_min = -100;
     motor0.cfg.control.currentd_pid_cfg.cfg.output_max = 15;                     //输出限幅
     motor0.cfg.control.currentd_pid_cfg.cfg.output_min = -15;
-    motor0.cfg.control.currentd_pid_cfg.cfg.kp = motor0.cfg.mcl.physical.motor.ls *          
-                                                (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *      //K_p=W_c*L
-                                                motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;
-    motor0.cfg.control.currentd_pid_cfg.cfg.ki = motor0.cfg.mcl.physical.motor.res *         
-                                                (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *      //K_i=W_c*R
-                                                motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;
+if(0)   //源码PI参数设定（旧公式：kp/ki 都多乘了 ωc 与 ts，2026-09-10 停用，仅备查）
+{
+    motor0.cfg.control.currentd_pid_cfg.cfg.kp = motor0.cfg.mcl.physical.motor.ls *
+                                                (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *
+                                                motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;         //K_p=电感*(带宽）^2*50us*1.5
+    motor0.cfg.control.currentd_pid_cfg.cfg.ki = motor0.cfg.mcl.physical.motor.res *
+                                                (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *
+                                                motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;         //K_i=电阻*(带宽）^2*50us*1.5
+}
+if(1)   //理论PI参数设定：标准整定 Kp=Ls*ωc、Ki=Rs*ωc*ts（PI零点对消电机极点 R/L）
+{
+    motor0.cfg.control.currentd_pid_cfg.cfg.kp = motor0.cfg.mcl.physical.motor.ls * MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI;    //K_p=电感*带宽
+    motor0.cfg.control.currentd_pid_cfg.cfg.ki = motor0.cfg.mcl.physical.motor.res *
+                                                (MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI) *
+                                                motor0.cfg.mcl.physical.time.current_loop_ts;          //K_i=电阻*带宽*50us
+}
     motor0.cfg.control.currentq_pid_cfg.cfg.integral_max = 100;
     motor0.cfg.control.currentq_pid_cfg.cfg.integral_min = -100;
     motor0.cfg.control.currentq_pid_cfg.cfg.output_max = 15;
     motor0.cfg.control.currentq_pid_cfg.cfg.output_min = -15;
+if(0)   //源码PI参数设定（旧公式，2026-09-10 停用，仅备查）
+{
     motor0.cfg.control.currentq_pid_cfg.cfg.kp = motor0.cfg.mcl.physical.motor.ls *
                                                 (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *
                                                 motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;
     motor0.cfg.control.currentq_pid_cfg.cfg.ki = motor0.cfg.mcl.physical.motor.res *
                                                 (powf(MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI, 2)) *
                                                 motor0.cfg.mcl.physical.time.current_loop_ts * 1.5f;
-
+}
+if(1)   //理论PI参数设定：标准整定 Kp=Ls*ωc、Ki=Rs*ωc*ts（PI零点对消电机极点 R/L）
+{
+    motor0.cfg.control.currentq_pid_cfg.cfg.kp = motor0.cfg.mcl.physical.motor.ls * MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI;    //K_p=电感*带宽
+    motor0.cfg.control.currentq_pid_cfg.cfg.ki = motor0.cfg.mcl.physical.motor.res *
+                                                (MOTOR0_CURRENT_LOOP_BANDWIDTH * 2 * MCL_PI) *
+                                                motor0.cfg.mcl.physical.time.current_loop_ts;          //K_i=电阻*带宽*50us
+}
     motor0.cfg.control.dead_area_compensation_cfg.cfg.lowpass_k = 0.1;   //死区补偿低通滤波器系数
  
 #if defined(HW_CURRENT_FOC_ENABLE)
@@ -597,7 +616,7 @@ void spi1_config(void)
     // 获取 SPI1 时钟源频率
     timing_cfg.master_config.clk_src_freq_in_hz = clock_get_frequency(clock_spi1);
     // 线路较差时可降回 4MHz（此时单次连读约 10us，仍在预算内）。
-    timing_cfg.master_config.sclk_freq_in_hz = 8000000;  // 8 MHz（手册支持最大 16 MHz）
+    timing_cfg.master_config.sclk_freq_in_hz = 8000000;  // 4MHz（手册支持最大 16 MHz）
     spi_master_timing_init(HPM_SPI1, &timing_cfg);
 
     // 3. 控制配置（固定，供后续传输使用） =====
@@ -622,13 +641,8 @@ uint8_t  g_byte1 = 0;        // 角度寄存器 0x004 读到的值
 uint8_t  g_byte2 = 0;        // 角度寄存器 0x005 读到的值
 uint8_t  g_user_id = 0;      // 读 USER_ID(0x001) 的值，用于验证通信
 uint8_t g_rx_byte = 0; 
-// 辅助函数：通过 SPI 读取 MT6835 单字节寄存器（静态，仅本文件使用）
-// 在文件顶部确保已定义这些宏（若没有则添加）
-// #define MT6835_CMD_READ_REG   0x3
-// #define MT6835_REG_ANGLE_MSB  0x003 ...
-// 以及全局变量 g_spi_err, g_rx_byte
 
-// SPI传输函数
+// 通过 SPI 读取 MT6835 单字节寄存器函数
 static hpm_stat_t mt6835_read_byte(uint16_t reg_addr, uint8_t *data)
 {
     uint8_t tx_buf[3] = 
@@ -869,19 +883,17 @@ hpm_mcl_stat_t adc_value_get(mcl_analog_chn_t chn, int32_t *value)
 
     case analog_b_current:
         // 实际硬件采样的是 C 相电流（ADCV_INDEX 对应 C 相）
-        sens_value = MCL_GET_ADC_12BIT_VALID_DATA(adc_buff[ADCV_INDEX][BOARD_BLDC_ADC_TRG*4]);
-        g_b = sens_value;
-        int32_t current_c = adc_v_midpoint - sens_value;   // C 相电流
-        *value = -(current_a + current_c);                 // B 相 = - (A + C)
+        
+        //sens_value = MCL_GET_ADC_12BIT_VALID_DATA(adc_buff[ADCV_INDEX][BOARD_BLDC_ADC_TRG*4]);
+        //g_b = sens_value;
+        //int32_t current_c = adc_v_midpoint - sens_value;   // C 相电流
+        //*value = -(current_a + current_c);                 // B 相 = - (A + C)
+        int32_t sens_a = MCL_GET_ADC_12BIT_VALID_DATA(adc_buff[ADCU_INDEX][BOARD_BLDC_ADC_TRG*4]);
+        int32_t sens_c = MCL_GET_ADC_12BIT_VALID_DATA(adc_buff[ADCV_INDEX][BOARD_BLDC_ADC_TRG*4]);
+        int32_t current_a_local = adc_u_midpoint - sens_a;
+        int32_t current_c = adc_v_midpoint - sens_c;
+        *value = -(current_a_local + current_c);
         break;
-
-    //case analog_c_current:
-    //    // 实际硬件采样的是 C 相电流（ADCV_INDEX 对应 C 相）
-    //    sens_value = MCL_GET_ADC_12BIT_VALID_DATA(adc_buff[ADCV_INDEX][BOARD_BLDC_ADC_TRG*4]);
-    //    g_c = sens_value;
-    //    *value = adc_v_midpoint - sens_value;                 
-    //    break;
-
     default:
         return mcl_fail;
     }
@@ -889,38 +901,7 @@ hpm_mcl_stat_t adc_value_get(mcl_analog_chn_t chn, int32_t *value)
     return mcl_success;
 }
 
-//hpm_mcl_stat_t adc_value_get(mcl_analog_chn_t chn, int32_t *value)
-//{
-//    int32_t current_a_adc;
-//    int32_t current_c_adc;
 
-//    if (value == NULL) {
-//        return mcl_invalid_pointer;
-//    }
-
-//    /* E249 实际采 A 相和 C 相；MCL 接口需要 A 相和 B 相。 */
-//    current_a_adc = (int32_t)MCL_GET_ADC_12BIT_VALID_DATA(
-//                        adc_buff[ADCU_INDEX][BOARD_BLDC_ADC_TRG * 4])
-//                  - (int32_t)adc_u_midpoint;
-//    current_c_adc = (int32_t)MCL_GET_ADC_12BIT_VALID_DATA(
-//                        adc_buff[ADCV_INDEX][BOARD_BLDC_ADC_TRG * 4])
-//                  - (int32_t)adc_v_midpoint;
-
-//    switch (chn) {
-//    case analog_a_current:
-//        *value = current_a_adc;
-//        break;
-//    case analog_b_current:
-//        /* 根据 Ia + Ib + Ic = 0，由实测 A/C 相重构 B 相。 */
-//       *value = current_c_adc;
-    
-//        break;
-//    default:
-//        return mcl_fail;
-//    }
-
-//    return mcl_success;
-//}
 
 hpm_mcl_stat_t enable_all_pwm_output(void)
 {
@@ -1135,7 +1116,7 @@ void pwm_init(void)
     /* 3. 配置比较器 2（ADC 触发） */
     cmp_config[2].enable_ex_cmp  = false;
     cmp_config[2].mode           = pwm_cmp_mode_output_compare;
-    cmp_config[2].cmp = 5;                                  // PWM 周期起点触发 ADC
+    cmp_config[2].cmp = 50;                                  // PWM 周期起点触发 ADC
     cmp_config[2].update_trigger = pwm_shadow_register_update_on_shlk;
 
     /* 4. 配置比较器 3（影子寄存器加载触发） */
@@ -1551,23 +1532,7 @@ void init_trigger_cfg(void)     //adc抢占模式配置
 
 
 
-
-/*
- * 【E249新增】软件触发读母线电压，返回实际电压(V)
- *
- * 链路: DC36V → R42(220K)/R43(6.8K) 分压 → VSENVM → ADC0_CH11
- *   ADC引脚电压 = adc_val / 4095 × 3.3V
- *   母线电压    = 引脚电压 × 分压比(33.35)   ← 分压比 = (220K+6.8K)/6.8K
- * 验证: 36V → 1.079V → adc_val≈1340 → 1340/4095×3.3≈1.079V → ×33.35≈36V ✓
- *
- * 用独立 TRG1A 软件触发，不影响 TRG0A 的电流采样(20kHz 硬件触发)
- */
-
-
-
-//SVPWM
-//SVPWM
-// 标准 SVPWM 实现
+// SVPWM 实现
 static void svpwm(float u_alpha, float u_beta, float Vdc,
                           float *duty_a, float *duty_b, float *duty_c)
 {
@@ -1680,8 +1645,8 @@ static void svpwm(float u_alpha, float u_beta, float Vdc,
 //ADC中断，执行电机运转文件
 mcl_control_svpwm_duty_t svpwm_duty;
 float Vdc = 36.0f;
-float Vref = 2.0f;                //给定电压矢量幅值
-static float target_freq = 15.0f;   // 目标电频率
+float Vref = 1.0f;                //给定电压矢量幅值
+static float target_freq = 5.0f;   // 目标电频率
 static float current_freq = 0.0f;  // 当前实际频率
 #define FREQ_RAMP_STEP  0.0005f      // 每步电频率增量
 volatile static float theta = 0.0f;
@@ -1690,6 +1655,11 @@ float svpwma;
 float svpwmb;
 float svpwmc;
 float fault_level;
+float g_ia = 0.0f;  // A 相采样电流（安培）
+float g_ib = 0.0f;  // B 相采样电流（安培）
+float g_ic = 0.0f;  // B 相采样电流（安培
+float speed_rad_s;    // 机械角速度，单位 rad/s
+float rpm ;           // 转/分钟
 
 void isr_adc(void)
 {   
@@ -1709,10 +1679,13 @@ void isr_adc(void)
         /* 编码器角度必须和电流环同频(20kHz)更新。放在 main 的 while(1) 里只有 ~1kHz，
            而且传给它的 tick 是按 50us 算的，速度会被放大约 20 倍，
            导致预测角和 dq 解耦前馈 uq += w*pole_num*(Ld*iq+flux) 严重失真。 */
-        //if (g_encoder_isr_enable) {
-        //    hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
-        //}
-
+        if (g_encoder_isr_enable) {
+            hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
+        }
+        hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
+        hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    //实际采样为c相
+        g_ic = -g_ia-g_ib ;
+        rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI); // 转/分钟
         //SVPWM开环转动
         if(SVPWM_MODE)
         {
@@ -2100,9 +2073,7 @@ void mcl_user_delay_us(uint64_t tick)
 {
     board_delay_us(tick);
 }
-float g_ia = 0.0f;  // A 相实际电流（安培）
-float g_ib = 0.0f;  // B 相实际电流（安培）
-float g_ic = 0.0f;  // B 相实际电流（安培
+
 float g_vbus =0.0f; //母线电压 
 float g_raw_u = 0;
 float g_raw_v = 0;   // 在全局定义
@@ -2116,26 +2087,10 @@ volatile uint32_t g_cmp5 = 0;  // PWM CMP[5] 实际寄存器值(W相低侧比较
 
 volatile float g_probe_keep = 0.0f;   /* 仅用于防止 --gc-sections 丢弃上面的探针符号 */
 
-/* 编码器零点偏移 theta_initial 的观测副本（对齐结束后刷新一次）。
-   物理含义：转子 d 轴(磁钢 N 极)被吸到 A 相绕组轴线时，MT6835 读到的机械角。
-   即"编码器机械零位"与"电机 A 相轴线"之间的夹角，完全由装配决定，单位是机械弧度。 */
-volatile float g_theta_initial = 0.0f;
 
-/* ===== 上电跳过对齐：把零点偏移直接编译进程序 =====
- * 装配固定后 theta_initial 就是常数（程序在 flash 里，掉电保持），不必每次上电重新对齐，
- * 转子也就不会"顿"一下。
- *
- * 取值步骤：
- *   1) 保持 ENC_SKIP_ALIGN = 0，烧录运行一次
- *   2) J-Scope 读 g_theta_initial（单位：机械弧度）
- *   3) 把读到的值填进 ENC_THETA_INITIAL，再把 ENC_SKIP_ALIGN 改成 1，重新烧录
- *
- * ⚠️ 4 对极电机有 4 个相差 π/2(1.5708) 的等效值，填【任意一个】都可以 —— 电角度完全等价。
- * ⚠️ 换电机 / 重装编码器 / 编码器与轴打滑后必须重新测一次。
- * ⚠️ 值填 0 或漏填会自动回退到上电对齐，不会用错角度。
- */
-#define ENC_SKIP_ALIGN      1       /* 1=跳过对齐，用下面的常量；0=每次上电对齐 */
-#define ENC_THETA_INITIAL   4.9862f    /*  实测的初始机械弧度 */
+volatile float g_theta_initial = 0.0f;
+#define ENC_SKIP_ALIGN      1           /* 1=跳过对齐，用下面的常量；0=每次上电对齐 */
+#define ENC_THETA_INITIAL   4.9862f     /*  实测的初始机械弧度 */
 
 int main(void)
 {
@@ -2197,26 +2152,27 @@ int main(void)
         g_theta_initial = motor0.encoder.theta_initial;   /* 供 J-Scope 观察零点偏移 */
     }
     mcl_user_value_t id, iq;
-    // 设置 Q 轴电流（转矩电流）为 0.5A，并启用
+    // Q 轴电流 = 转矩电流。它同时决定转速：本工程没开速度环，转速由
+    // "电磁转矩 = 摩擦转矩" 的平衡点决定，所以 iq 一加，转速就跟着涨。
     iq.enable = true;
     iq.value = 0.1f;
     hpm_mcl_loop_set_current_q(&motor0.loop, iq);
-    // 设置 D 轴电流（励磁电流）为 0，并启用
+    // D 轴电流 = 励磁电流。表贴式(SPM)电机 Ld≈Lq，id 不产生转矩 ——
+    // 所以加大 id 可以只把"相电流幅值"顶上去（提高 ADC 信噪比），
+    // 而转速基本不变。这是在转矩受限、不能再加 iq 时放大电流波形的办法。
+    // 相电流幅值 = sqrt(id^2 + iq^2) = sqrt(0.5^2 + 0.1^2) ≈ 0.51 A（≈63 个 ADC 码）
+    // 若要退出该测试，把 0.5f 改回 0.0f 即可。
     id.enable = true;
-    id.value = 0.0f;
+    id.value = 0.5f;
     hpm_mcl_loop_set_current_d(&motor0.loop, id);
-//编码器角度读取测试
        while (1) 
       {
         /* 保持对 J-Scope 探针符号的引用，避免链接器 gc-sections 把它们删掉 */
         g_probe_keep = g_ref_q + g_sens_q + g_ref_d + g_sens_d + g_ud + g_uq + g_theta_e + g_theta_initial;
         g_raw_u = (float)adc_buff[0][0];   
         g_raw_v = (float)adc_buff[1][0];
-        hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
-        hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
-        hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    //实际采样为c相
-        g_ic = -g_ia-g_ib ;
-        g_vbus = read_vbus();
+        //hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
+
         if(0)//电流采样测试
         {
         ADC16_Type *adc0 = HPM_ADC0;
@@ -2229,7 +2185,7 @@ int main(void)
         }
         if(0)////电流方向确认、转子旋转方向确认
         {
-              #define TEST_VREF  0.3f   // 电压幅值
+              #define TEST_VREF  0.1f   // 电压幅值
 
               // 固定角度为 0，即电压矢量指向 A 轴正方向
               float theta_fixed = 0.0f; 
