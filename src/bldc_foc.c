@@ -81,8 +81,19 @@
 #define ADCV_INDEX 1
 
 //模式切换
-#define SVPWM_MODE 1
+#define SVPWM_MODE 0
+#define FOC_MODE 1
 #define FOC_CURRENT_MODE 0
+#define FOC_SPEED_MODE  0
+#define FOC_POSITION_MODE 1
+/* 位置目标：相对"使能瞬间位置"的机械角增量（rad，正 = 编码器角度递增方向）。
+   1.5π = 270°，约 3/4 圈。
+   为什么用增量而不是写死绝对角度：MT6835 的机械零点与电机 d 轴之间没有标定关系，
+   而且每次上电做角度对齐时，转子被吸到"电角度 = 0"的最近一个稳定点 ——
+   极对数 p = 4，电角度 0 对应 4 个机械位置、彼此相隔 2π/4 = 90°，
+   落在哪一个取决于断电时转子停在哪里。用绝对角度做目标时，
+   err = 目标 - 当前机械角 的符号每次都可能不同，于是"有时正转、有时反转"。 */
+#define POS_TARGET_DELTA  (12.5f * MCL_PI)
 #define USE_VIRTUAL_ANGLE 0
 #define motor_ban 0
 
@@ -90,8 +101,25 @@
 #ifndef BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP
 #define BOARD_BLDC_HW_FOC_SPEED_KP (0.01f)
 #define BOARD_BLDC_HW_FOC_SPEED_KI (0.001f)
-#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP (0.0074f)
-#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KI (0.0001f)
+/* 速度环 PI（2026-09-11 重算）
+ * 依据：Kt = 1.5 * pole_num * flux = 1.5*4*0.009 = 0.054 N·m/A，J = 6.2e-6 kg·m^2
+ *       => Kt/J = 8710 (rad/s)/A ；速度环 4kHz，Ts = 250us
+ * 无延迟理论整定（ωn=94.2rad/s=15Hz，ζ=1）：
+ *   kp      = 2ζωn / (Kt/J) = 2*94.2/8710 = 0.0216 -> 取 0.02
+ *   ki_cont = ωn^2 / (Kt/J) = 94.2^2/8710 = 1.019
+ *   ki_disc = ki_cont * Ts  = 1.019*2.5e-4 = 2.55e-4
+ *   （MCL 的 PI 是 integral += ki*err，ki 已含 Ts，不要再除周期）
+ *
+ * 但速度反馈要过 encoder_iir（2 段二阶、fpass=100Hz @ 20kHz），等效时延约 5ms，
+ * 在 15Hz 带宽上就是 ~28° 的相位滞后。按上面 ζ=1 直接整定，阶跃响应实测会超调 50%，
+ * 起转瞬间表现为"猛冲一下"。所以 ki 从 2.55e-4 退到 8e-5，kp 保留 0.02。
+ * 仿真（J=6.2e-6, 库仑摩擦 0.004N·m, 反馈时延 5ms, 给定斜率 500rad/s^2）：
+ *   起转 11ms，峰值 52.8rad/s（超调 5.6%）。
+ * 旧值 kp=0.0074/ki=0.0001 对应 ωn≈59rad/s(9.4Hz)、ζ≈0.55 —— 太软，
+ * 起步阶段几乎不出转矩，是"顿一下再起转"的主因。
+ * 若实测带载惯量远大于 6.2e-6，kp/ki 按 J 同比例放大。 */
+#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP (0.02f)
+#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KI (0.00008f)
 #define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KP (0.05f)
 #define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KI (0.001f)
 #define BOARD_BLDC_HW_FOC_POSITION_KP (34.7f)
@@ -383,10 +411,17 @@ if(1)   //理论PI参数设定：标准整定 Kp=Ls*ωc、Ki=Rs*ωc*ts（PI零�
     motor0.cfg.control.speed_pid_cfg.cfg.kp = BOARD_BLDC_HW_FOC_SPEED_KP;
     motor0.cfg.control.speed_pid_cfg.cfg.ki = BOARD_BLDC_HW_FOC_SPEED_KI;
 #else
-    motor0.cfg.control.speed_pid_cfg.cfg.integral_max = 100;
-    motor0.cfg.control.speed_pid_cfg.cfg.integral_min = -100;
-    motor0.cfg.control.speed_pid_cfg.cfg.output_max = 5;
-    motor0.cfg.control.speed_pid_cfg.cfg.output_min = -5;
+    /* 限幅（2026-09-11 收紧）：
+     * output_max 原为 5A，但 physical.motor.i_max = 3A —— 速度环可以要到 5A，
+     * 直接顶到过流保护阈值，起转瞬间会被 detect 打断。
+     * integral_max 原为 100，而 MCL 的 hpm_mcl_control_pi() 没有抗饱和：
+     * 输出被 output_max 削掉后积分仍在累加，最多能攒到 100，退饱和要几十秒，
+     * 表现为起转时"猛冲一下"然后长时间回不来。把积分限幅压到和输出限幅一致，
+     * 是最省事的抗饱和办法。 */
+    motor0.cfg.control.speed_pid_cfg.cfg.integral_max = 3;
+    motor0.cfg.control.speed_pid_cfg.cfg.integral_min = -3;
+    motor0.cfg.control.speed_pid_cfg.cfg.output_max = 3;
+    motor0.cfg.control.speed_pid_cfg.cfg.output_min = -3;
     motor0.cfg.control.speed_pid_cfg.cfg.kp = BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP;
     motor0.cfg.control.speed_pid_cfg.cfg.ki = BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KI;
 #endif
@@ -422,7 +457,7 @@ if(1)   //理论PI参数设定：标准整定 Kp=Ls*ωc、Ki=Rs*ωc*ts（PI零�
 #if defined(HW_CURRENT_FOC_ENABLE)
     motor0.cfg.clc.clc_set_val = motor0_clc_set_currentloop_value;
     motor0.cfg.clc.convert_float_to_clc_val = motor0_clc_float_convert_clc;
-    motor0.loop.hardware = &motor0.cfg.clc;
+    motor0.loop.hard`ware = &motor0.cfg.clc;
 #endif
 
 #if defined(HW_CURRENT_FOC_ENABLE)
@@ -430,8 +465,9 @@ if(1)   //理论PI参数设定：标准整定 Kp=Ls*ωc、Ki=Rs*ωc*ts（PI零�
 #else
     motor0.cfg.loop.mode = mcl_mode_foc;
 #endif
-    motor0.cfg.loop.enable_speed_loop = false;      //关闭速度环
-
+    motor0.cfg.loop.enable_speed_loop =true; //速度环
+    motor0.cfg.loop.enable_position_loop = true; //位置环     
+  
     motor0.cfg.detect.enable_detect = true;
     motor0.cfg.detect.en_submodule_detect.analog = true;
     motor0.cfg.detect.en_submodule_detect.drivers = true;
@@ -857,12 +893,50 @@ hpm_mcl_stat_t encoder_get_theta(float *theta)
 }
 
 
+/* ===== 多圈连续机械角（2026-09-14）=====
+   MT6835 是单圈绝对编码器，encoder_get_theta() 只返回 [0, 2π) 的机械角。
+   MCL 的 hpm_mcl_position_pid() 直接算 err = setpoint - feedback，不做 ±π 归一化，
+   所以反馈在 0/2π 处回绕时 err 会瞬间跳 ±2π，位置环输出跟着翻符号：
+   电机已经转过目标却以为"还差一整圈"，于是继续同向或反向狂转 —— 这就是
+   "有时候转到位、有时候反向一直转"。这里把单圈角展开成连续多圈角，
+   回绕不再改变误差方向；同时目标取"相对基准的增量"，方向唯一确定。 */
+static float   g_abs_theta     = 0.0f;   /* 连续多圈机械角，基准点由 encoder_abs_rebase() 归零 */
+static float   g_abs_theta_prv = 0.0f;
+static bool    g_abs_theta_rdy = false;
+volatile float g_pos_abs       = 0.0f;   /* J-Scope 观测：位置环反馈（多圈机械角 rad） */
+volatile float g_pos_ref       = 0.0f;   /* J-Scope 观测：位置给定（多圈机械角 rad） */
+volatile float g_pos_err       = 0.0f;   /* J-Scope 观测：位置误差 */
+volatile float g_ref_speed     = 0.0f;   /* J-Scope 观测：位置环输出的速度给定 rad/s */
+
+void encoder_abs_rebase(void)
+{
+    g_abs_theta     = 0.0f;
+    g_abs_theta_rdy = false;    /* 下一拍 get_abs_theta 会把当前角作为新的 0 基准 */
+}
+
 hpm_mcl_stat_t encoder_get_abs_theta(float *theta)
 {
-    //return hpm_mcl_abz_get_abs_theta(BLDC_MOTOR_QEI_BASE, BOARD_BLDC_QEI_FOC_PHASE_COUNT_PER_REV,\
-    //    ((MCL_PI * 2) / BOARD_BLDC_QEI_FOC_PHASE_COUNT_PER_REV), -abs_position_theta, theta);
-    return encoder_get_theta(theta);   // 直接读取绝对角度
+    float th;
+    float d;
 
+    if (encoder_get_theta(&th) != mcl_success) {
+        return mcl_fail;
+    }
+    if (!g_abs_theta_rdy) {
+        g_abs_theta_prv = th;
+        g_abs_theta_rdy = true;
+    }
+    d = th - g_abs_theta_prv;
+    if (d > MCL_PI) {
+        d -= 2.0f * MCL_PI;
+    } else if (d < -MCL_PI) {
+        d += 2.0f * MCL_PI;
+    }
+    g_abs_theta += d;
+    g_abs_theta_prv = th;
+    g_pos_abs = g_abs_theta;
+    *theta = g_abs_theta;
+    return mcl_success;
 }
 volatile int32_t g_a;
 volatile int32_t g_b;
@@ -1676,17 +1750,15 @@ void isr_adc(void)
     {
         hpm_adc_v2_clear_status_flags(adc_u, HPM_ADC_V2_EVENT_TRIG_COMPLETE);         //清除中断标志
 
-        /* 编码器角度必须和电流环同频(20kHz)更新。放在 main 的 while(1) 里只有 ~1kHz，
-           而且传给它的 tick 是按 50us 算的，速度会被放大约 20 倍，
-           导致预测角和 dq 解耦前馈 uq += w*pole_num*(Ld*iq+flux) 严重失真。 */
         if (g_encoder_isr_enable) {
             hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
         }
         hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
         hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    //实际采样为c相
         g_ic = -g_ia-g_ib ;
+        speed_rad_s = motor0.encoder.result.speed;                    // 机械角速度 rad/s
         rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI); // 转/分钟
-        //SVPWM开环转动
+        //SVPWM开环转动6
         if(SVPWM_MODE)
         {
             if (current_freq < target_freq)                   //软启动
@@ -1711,7 +1783,7 @@ void isr_adc(void)
             svpwmc = svpwm_duty.c;
         }
         //电流环闭环
-        if (FOC_CURRENT_MODE) 
+        if (FOC_MODE) 
         {   
             hpm_mcl_loop(&motor0.loop);   
         }
@@ -2097,9 +2169,10 @@ int main(void)
     char input_data[100], input_end;
     mcl_user_value_t  user_speed;     //定义结构体速度，包含数据和使能
     mcl_user_value_t user_position;   //定义结构体位置
+
     uint8_t i;
     uint8_t user_mode;
-    float speed;
+
     int32_t position;
     board_init();                     //初始化开发板√
     init_spi1_pins();                 // 配置编码器引脚
@@ -2129,11 +2202,11 @@ int main(void)
     mt6835_seq3_init();
     // 必须先使能控制环再对齐：hpm_mcl_loop() 内部所有计算与 PWM 输出都在 if(loop->enable) 里，
     // 环没使能时对齐不会输出任何电流，转子不会吸合，theta_initial 会取到一个随机角度。
+        //速度环驱动
+    
     hpm_mcl_loop_enable(&motor0.loop);  // 使能控制环
 
-    /* 对齐期间必须冻结电角度为 0（等价于 SDK 里的 force_theta(0)）。
-       注意 hpm_mcl_encoder.c 里 force_theta 分支被 if(0) 旁路了，一旦中断开始刷新角度，
-       force_theta 就失效、转子会被恒力矩拖走，theta_initial 记到随机位置 —— 所以用这个开关替代。 */
+//角度对齐替换
     if (ENC_SKIP_ALIGN && (ENC_THETA_INITIAL > 0.0f)) 
     {
         /* 跳过对齐：直接用已标定的零点偏移，转子不再被强行吸到 d 轴 */
@@ -2143,35 +2216,82 @@ int main(void)
     } 
     else
     {
-        /* 对齐期间必须冻结电角度为 0（等价于 SDK 里的 force_theta(0)）。
-           注意 hpm_mcl_encoder.c 里 force_theta 分支被 if(0) 旁路了，一旦中断开始刷新角度，
-           force_theta 就失效、转子会被恒力矩拖走，theta_initial 记到随机位置 —— 所以用这个开关替代。 */
         g_encoder_isr_enable = 0;
         motor_angle_align();   // 对齐编码器角度
         g_encoder_isr_enable = 1;   /* 之后由 ADC 中断按 20kHz 刷新角度 */
         g_theta_initial = motor0.encoder.theta_initial;   /* 供 J-Scope 观察零点偏移 */
     }
-    mcl_user_value_t id, iq;
-    // Q 轴电流 = 转矩电流。它同时决定转速：本工程没开速度环，转速由
-    // "电磁转矩 = 摩擦转矩" 的平衡点决定，所以 iq 一加，转速就跟着涨。
-    iq.enable = true;
-    iq.value = 0.1f;
-    hpm_mcl_loop_set_current_q(&motor0.loop, iq);
-    // D 轴电流 = 励磁电流。表贴式(SPM)电机 Ld≈Lq，id 不产生转矩 ——
-    // 所以加大 id 可以只把"相电流幅值"顶上去（提高 ADC 信噪比），
-    // 而转速基本不变。这是在转矩受限、不能再加 iq 时放大电流波形的办法。
-    // 相电流幅值 = sqrt(id^2 + iq^2) = sqrt(0.5^2 + 0.1^2) ≈ 0.51 A（≈63 个 ADC 码）
-    // 若要退出该测试，把 0.5f 改回 0.0f 即可。
-    id.enable = true;
-    id.value = 0.5f;
-    hpm_mcl_loop_set_current_d(&motor0.loop, id);
+
+    /* ===== 上电第一拍假速度尖峰：先冲洗，再出力（2026-09-11）=====
+       hpm_mcl_encoder_init() 里 memset(cal_speed.memory) 把 M 法测速的 theta_last 清成 0，
+       而第一次 hpm_mcl_encoder_process() 算的是 θ - 0，θ 增量最高可达 ±π。
+       除以 50us 采样周期 => 原始假速度 ±62832 rad/s。
+       这个冲激经 encoder_iir（100Hz 四阶，实测冲激响应峰值 0.0248、滞后 2.2ms）后，
+       输出仍有 ±1557 rad/s，要约 4ms 才衰减完。
+       速度环 4kHz 采样正好撞上：err = 0 - 1557 => kp*err = -31 => iq 顶到 -3A 约 2ms，
+       电机被反向踹一脚（J-Scope: speed Min≈-27rad/s），拉回时再过冲到 +64rad/s。
+       这就是"每次上电都顿一下"。
+       处理：编码器已经在 20kHz 跑了，这里让控制环保持关闭 20ms（τ≈2.25ms，
+       20ms 后尖峰 <0.01%），假速度在滤波器里自然耗散、不出任何转矩，
+       然后重新清积分、再正式使能。 */
+//耗散掉假速度，防止过冲
+    hpm_mcl_loop_disable(&motor0.loop);
+    board_delay_ms(20);
+    hpm_mcl_loop_enable(&motor0.loop);  // 正式使能，开始出力
+//电流环驱动
+    if(FOC_CURRENT_MODE)
+    {
+        mcl_user_value_t id, iq;
+        iq.enable = true;
+        iq.value = 0.1f;
+        hpm_mcl_loop_set_current_q(&motor0.loop, iq);
+        id.enable = true;
+        id.value = 0.5f;
+        hpm_mcl_loop_set_current_d(&motor0.loop, id);
+    }
+    /* ===== 位置环 / 速度环必须互斥（2026-09-14）=====
+       hpm_mcl_current_foc_loop() 里这一行：
+           MCL_FUNCTION_SET_IF_ELSE_TRUE(loop->ref_speed.enable, ref_speed,
+                                         loop->ref_speed.value, loop->exec_ref.speed);
+       只要 ref_speed.enable == true，速度给定就恒等于 ref_speed.value，
+       位置环算出的 exec_ref.speed 每 250us 被覆盖一次 —— 位置环彻底失效，
+       电机按恒定速度一直转、永远不停。位置环模式下务必把速度给定 disable。 */
+    if(FOC_POSITION_MODE)
+    {
+        mcl_user_value_t position;
+
+        user_speed.enable = false;      /* 防止速度给定盖掉位置环输出 */
+        user_speed.value  = 0.0f;
+        hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
+        motor0.cfg.control.position_pid_cfg.integral = 0.0f;   /* 位置环积分清零 */
+
+        encoder_abs_rebase();           /* 以当前机械位置为 0 基准 */
+
+        position.enable = true;
+        position.value  = POS_TARGET_DELTA;   /* 相对基准的位置增量（机械角 rad） */
+        hpm_mcl_loop_set_position(&motor0.loop, position);
+        g_pos_ref = position.value;
+    }
+    else if(FOC_SPEED_MODE)
+    {
+        user_speed.enable = true;
+        user_speed.value = 50;    //机械角速度rad/s
+        hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
+    }
+
+    static float speed_ref_ramp = 0.0f;
+
        while (1) 
       {
         /* 保持对 J-Scope 探针符号的引用，避免链接器 gc-sections 把它们删掉 */
         g_probe_keep = g_ref_q + g_sens_q + g_ref_d + g_sens_d + g_ud + g_uq + g_theta_e + g_theta_initial;
         g_raw_u = (float)adc_buff[0][0];   
         g_raw_v = (float)adc_buff[1][0];
+        /* 位置环观测（供 J-Scope）：给定、反馈、误差、位置环输出的速度给定 */
+        g_pos_err   = g_pos_ref - g_pos_abs;
+        g_ref_speed = motor0.loop.exec_ref.speed;
         //hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
+
 
         if(0)//电流采样测试
         {
