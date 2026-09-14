@@ -485,6 +485,13 @@
                     <state>$PROJ_DIR$\../../../../../middleware/hpm_mcl_v2/core/control</state>
                     <state>$PROJ_DIR$\../build_tmp/generated/include</state>
                     <state>$PROJ_DIR$\../../src</state>
+                    <state>$PROJ_DIR$\../../src/hal</state>
+                    <state>$PROJ_DIR$\../../src/driver</state>
+                    <state>$PROJ_DIR$\../../src/sensor</state>
+                    <state>$PROJ_DIR$\../../src/motor</state>
+                    <state>$PROJ_DIR$\../../src/control</state>
+                    <state>$PROJ_DIR$\../../src/debug</state>
+                    <state>$PROJ_DIR$\../../src/app</state>
                 </option>
                 <option>
                     <name>CCStdIncCheck</name>
@@ -616,6 +623,13 @@
                     <state>$PROJ_DIR$\../../../../../middleware/hpm_mcl_v2/core/control</state>
                     <state>$PROJ_DIR$\../build_tmp/generated/include</state>
                     <state>$PROJ_DIR$\../../src</state>
+                    <state>$PROJ_DIR$\../../src/hal</state>
+                    <state>$PROJ_DIR$\../../src/driver</state>
+                    <state>$PROJ_DIR$\../../src/sensor</state>
+                    <state>$PROJ_DIR$\../../src/motor</state>
+                    <state>$PROJ_DIR$\../../src/control</state>
+                    <state>$PROJ_DIR$\../../src/debug</state>
+                    <state>$PROJ_DIR$\../../src/app</state>
                 </option>
                 <option>
                     <name>AsmDefines</name>
@@ -1642,6 +1656,13 @@
                     <state>$PROJ_DIR$\../../../../../middleware/hpm_mcl_v2/core/control</state>
                     <state>$PROJ_DIR$\../build_tmp/generated/include</state>
                     <state>$PROJ_DIR$\../../src</state>
+                    <state>$PROJ_DIR$\../../src/hal</state>
+                    <state>$PROJ_DIR$\../../src/driver</state>
+                    <state>$PROJ_DIR$\../../src/sensor</state>
+                    <state>$PROJ_DIR$\../../src/motor</state>
+                    <state>$PROJ_DIR$\../../src/control</state>
+                    <state>$PROJ_DIR$\../../src/debug</state>
+                    <state>$PROJ_DIR$\../../src/app</state>
                 </option>
                 <option>
                     <name>CCStdIncCheck</name>
@@ -1773,6 +1794,13 @@
                     <state>$PROJ_DIR$\../../../../../middleware/hpm_mcl_v2/core/control</state>
                     <state>$PROJ_DIR$\../build_tmp/generated/include</state>
                     <state>$PROJ_DIR$\../../src</state>
+                    <state>$PROJ_DIR$\../../src/hal</state>
+                    <state>$PROJ_DIR$\../../src/driver</state>
+                    <state>$PROJ_DIR$\../../src/sensor</state>
+                    <state>$PROJ_DIR$\../../src/motor</state>
+                    <state>$PROJ_DIR$\../../src/control</state>
+                    <state>$PROJ_DIR$\../../src/debug</state>
+                    <state>$PROJ_DIR$\../../src/app</state>
                 </option>
                 <option>
                     <name>AsmDefines</name>
@@ -2318,7 +2346,36 @@
     <group><name>motor_ctrl</name>
       <group><name>bldc_foc</name>
         <group><name>src</name>
-          <file><name>$PROJ_DIR$\..\..\src\bldc_foc.c</name></file>
+          <group><name>hal</name>
+            <file><name>$PROJ_DIR$\..\..\src\hal\hal_bsp.c</name></file>
+          </group>
+          <group><name>driver</name>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_spi.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_pwm.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_adc.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_timer.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_qei.c</name></file>
+          </group>
+          <group><name>sensor</name>
+            <file><name>$PROJ_DIR$\..\..\src\sensor\mt6835.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\sensor\sens_encoder.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\sensor\sens_analog.c</name></file>
+          </group>
+          <group><name>motor</name>
+            <file><name>$PROJ_DIR$\..\..\src\motor\motor.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\motor\motor_hw_foc.c</name></file>
+          </group>
+          <group><name>control</name>
+            <file><name>$PROJ_DIR$\..\..\src\control\ctrl_svpwm.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\control\ctrl_foc.c</name></file>
+          </group>
+          <group><name>debug</name>
+            <file><name>$PROJ_DIR$\..\..\src\debug\dbg_probe.c</name></file>
+          </group>
+          <group><name>app</name>
+            <file><name>$PROJ_DIR$\..\..\src\app\app_monitor.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\app\main.c</name></file>
+          </group>
         </group>
       </group>
     </group>

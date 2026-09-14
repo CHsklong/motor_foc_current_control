@@ -37,7 +37,7 @@
       build_generic_options_file_name=""
       build_output_file_name="$(OutDir)/demo$(EXE)"
       c_additional_options="-Wall;-Wundef;-Wno-format;-fomit-frame-pointer;-fno-builtin;-ffunction-sections;-fdata-sections;-g"
-      c_user_include_directories="../../../../../arch;../../../../../arch/riscv/l1c;../../../../../arch/riscv/intc;../../../../../boards/hpm5300evk;../../../../../soc/HPM5300/HPM5361;../../../../../soc/HPM5300/ip;../../../../../soc/HPM5300/HPM5361/toolchains;../../../../../soc/HPM5300/HPM5361/boot;../../../../../drivers/inc;../../../../../utils;../../../../../components/debug_console;../../../../../components/adc_v2;../../../../../middleware/hpm_mcl_v2;../../../../../middleware/hpm_mcl_v2/encoder;../../../../../middleware/hpm_mcl_v2/drivers;../../../../../middleware/hpm_mcl_v2/core/sensor;../../../../../middleware/hpm_mcl_v2/core/drivers;../../../../../middleware/hpm_mcl_v2/core/loop;../../../../../middleware/hpm_mcl_v2/core/detect;../../../../../middleware/hpm_mcl_v2/core/control;../build_tmp/generated/include;../../src;"
+      c_user_include_directories="../../../../../arch;../../../../../arch/riscv/l1c;../../../../../arch/riscv/intc;../../../../../boards/hpm5300evk;../../../../../soc/HPM5300/HPM5361;../../../../../soc/HPM5300/ip;../../../../../soc/HPM5300/HPM5361/toolchains;../../../../../soc/HPM5300/HPM5361/boot;../../../../../drivers/inc;../../../../../utils;../../../../../components/debug_console;../../../../../components/adc_v2;../../../../../middleware/hpm_mcl_v2;../../../../../middleware/hpm_mcl_v2/encoder;../../../../../middleware/hpm_mcl_v2/drivers;../../../../../middleware/hpm_mcl_v2/core/sensor;../../../../../middleware/hpm_mcl_v2/core/drivers;../../../../../middleware/hpm_mcl_v2/core/loop;../../../../../middleware/hpm_mcl_v2/core/detect;../../../../../middleware/hpm_mcl_v2/core/control;../build_tmp/generated/include;../../src;../../src/hal;../../src/driver;../../src/sensor;../../src/motor;../../src/control;../../src/debug;../../src/app;"
       debug_target_connection="GDB Server"
       gcc_all_warnings_command_line_options="-Wall;-Wextra;-Wno-format"
       gcc_cplusplus_language_standard="c++11"
@@ -409,14 +409,121 @@
       <folder Name="motor_ctrl">
         <folder Name="bldc_foc">
           <folder Name="src">
-            <configuration
-              Name="Common"
-              build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src" />
-            <file file_name="../../src/bldc_foc.c">
+            <folder Name="app">
               <configuration
                 Name="Common"
-                build_object_file_name="$(IntDir)/bldc_foc.c$(OBJ)" />
-            </file>
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/app" />
+              <file file_name="../../src/app/app_monitor.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/app_monitor.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/app/main.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/main.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="control">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/control" />
+              <file file_name="../../src/control/ctrl_foc.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/ctrl_foc.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/control/ctrl_svpwm.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/ctrl_svpwm.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="debug">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/debug" />
+              <file file_name="../../src/debug/dbg_probe.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/dbg_probe.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="driver">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/driver" />
+              <file file_name="../../src/driver/drv_adc.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/drv_adc.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/driver/drv_pwm.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/drv_pwm.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/driver/drv_qei.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/drv_qei.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/driver/drv_spi.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/drv_spi.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/driver/drv_timer.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/drv_timer.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="hal">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/hal" />
+              <file file_name="../../src/hal/hal_bsp.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/hal_bsp.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="motor">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/motor" />
+              <file file_name="../../src/motor/motor.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/motor.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/motor/motor_hw_foc.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/motor_hw_foc.c$(OBJ)" />
+              </file>
+            </folder>
+            <folder Name="sensor">
+              <configuration
+                Name="Common"
+                build_intermediate_directory="Output/$(Configuration)/Obj/$(ProjectName)/sdk_sample/motor_ctrl/bldc_foc/src/sensor" />
+              <file file_name="../../src/sensor/mt6835.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/mt6835.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/sensor/sens_analog.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/sens_analog.c$(OBJ)" />
+              </file>
+              <file file_name="../../src/sensor/sens_encoder.c">
+                <configuration
+                  Name="Common"
+                  build_object_file_name="$(IntDir)/sens_encoder.c$(OBJ)" />
+              </file>
+            </folder>
           </folder>
         </folder>
       </folder>
