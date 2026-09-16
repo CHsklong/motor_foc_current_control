@@ -192,15 +192,17 @@ int main(void)
 
 /* ---- 主循环（约 1kHz）---- */
     while (1)
-    {   
+    {
+        g_main_step = 1U;        /* 1=观测/探针段 */
         g_heart_main++;
         dbg_probe_keep();        /* 兜住 J-Scope 探针符号，防止 --gc-sections 删除 */
 
         app_monitor_update();    /* 观测量 */
 
+        g_main_step = 2U;        /* 2=运行监护段 */
         app_keeper_update();     /* 运行监护：把上电期的锁死类故障自动救回来 */
 
-          
+        g_main_step = 3U;        /* 3=motor_ban 分支 */
         if (motor_ban)
         {
             /* 保持电机静止：输出 50% 占空比 */
@@ -209,6 +211,7 @@ int main(void)
             pwm_duty_set(mcl_drivers_chn_c, 0.5);
         }
 
+        g_main_step = 4U;        /* 4=电流环阶跃测试块 */
         if(1)                   //电流环阶跃响应测试
         {
 
@@ -218,6 +221,7 @@ int main(void)
           id.value = 0.0f;          // 阶跃到 0.0A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
         }
+        g_main_step = 5U;        /* 5=1ms 延时段 */
         board_delay_ms(1);
     }
 

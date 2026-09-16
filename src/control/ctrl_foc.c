@@ -109,10 +109,32 @@ SDK_DECLARE_EXT_ISR_M(BOARD_BLDC_ADC_IRQn, isr_adc)
  *   - 控制时序抖动，电流环出力异常，电机异响或干脆不起转。
  * 所以这个数字是判断"到底是 main 卡住，还是被中断饿死"的决定性依据。
  */
+/**
+ * @brief 周期数换算成 us 的除数（首次调用时按 CPU 主频算好，之后恒定）
+ *
+ * 换算放在 ISR 里而不是主循环：main 被饿死/卡死时，J-Scope 里照样能看到
+ * 中断耗时，不必再靠"main 活着"才能出数。
+ */
+static uint32_t isr_cycles_per_us(void)
+{
+    static uint32_t per_us;
+
+    if (per_us == 0U)
+    {
+        per_us = motor0.cfg.mcl.physical.time.mcu_clock_tick / 1000000U;
+        if (per_us == 0U)
+        {
+            per_us = 1U;    /* 防除零：配置没跑时就按 1 处理 */
+        }
+    }
+    return per_us;
+}
+
 static void isr_timed_end(uint32_t t0)
 {
     uint32_t dt     = (uint32_t)hpm_csr_get_core_cycle() - t0;
     uint32_t budget = motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY;
+    uint32_t per_us = isr_cycles_per_us();
 
     g_isr_cycles_last = dt;
     if (dt > g_isr_cycles_max) {
@@ -121,6 +143,14 @@ static void isr_timed_end(uint32_t t0)
     if (dt > budget) {
         g_isr_over_cnt++;    /* 超时拍数：持续增加就是节拍跑不完 */
     }
+    g_isr_us_last = dt / per_us;
+    if (g_isr_us_last > g_isr_us_max) {
+        g_isr_us_max = g_isr_us_last;
+    }
+
+    /* 分段耗时：编码器段慢 → SPI 问题；环路段慢 → 控制计算问题 */
+    g_enc_us_max  = g_enc_cycles_max / per_us;
+    g_loop_us_max = g_loop_cycles_max / per_us;
 }
 
 void isr_adc(void)
@@ -136,9 +166,14 @@ void isr_adc(void)
     {
         hpm_adc_v2_clear_status_flags(adc_u, HPM_ADC_V2_EVENT_TRIG_COMPLETE);
 
-        if (g_encoder_isr_enable) 
+        if (g_encoder_isr_enable)
         {
+            uint32_t t_enc = (uint32_t)hpm_csr_get_core_cycle();
             hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
+            t_enc = (uint32_t)hpm_csr_get_core_cycle() - t_enc;
+            if (t_enc > g_enc_cycles_max) {
+                g_enc_cycles_max = t_enc;
+            }
         }
         hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
         hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    /* 实际采样为 C 相 */
@@ -154,8 +189,9 @@ void isr_adc(void)
             svpwm_openloop_step();
         }
 
-        if (FOC_MODE) 
+        if (FOC_MODE)
         {
+            uint32_t t_loop = (uint32_t)hpm_csr_get_core_cycle();
         #if FOC_POSITION_MODE
                     position_loop_pre();     /* 位置环：设定本拍动态限幅 */
         #endif
@@ -163,6 +199,10 @@ void isr_adc(void)
         #if FOC_POSITION_MODE
                     position_loop_post();    /* 位置环：抗饱和回退 + 观测刷新 */
         #endif
+            t_loop = (uint32_t)hpm_csr_get_core_cycle() - t_loop;
+            if (t_loop > g_loop_cycles_max) {
+                g_loop_cycles_max = t_loop;
+            }
         }
     }
 
