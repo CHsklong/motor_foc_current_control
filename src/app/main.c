@@ -113,6 +113,7 @@ int main(void)
 /* ---- 角度对齐 ---- */
     int theta_need_save = 0;            /* 1=本次跑了对齐，需要把结果存进 FLASH */
 
+    g_boot_step = 14U;
     if (ENC_SKIP_ALIGN && (theta_init > 0.0f))
     {
         /* 跳过对齐：直接用 FLASH 里已标定的零点偏移（首次上电则是 ENC_THETA_INITIAL），
@@ -131,6 +132,7 @@ int main(void)
     }
 
     /* ===== 上电第一拍假速度尖峰：先冲洗，再出力 */
+    g_boot_step = 15U;
     hpm_mcl_loop_disable(&motor0.loop);
     if (theta_need_save && FLASH_PARAM_CALIB_ONCE)
     {
@@ -140,6 +142,7 @@ int main(void)
            所以只在 FLASH_PARAM_CALIB_ONCE=1（标定固件）时才做。 */
         drv_flash_save_theta(g_theta_initial, false);
     }
+    g_boot_step = 16U;
     board_delay_ms(20);
     hpm_mcl_loop_enable(&motor0.loop);  /* 正式使能，开始出力 */
 
