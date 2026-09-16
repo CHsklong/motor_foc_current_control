@@ -56,6 +56,7 @@ sdk_app_src(src/debug/dbg_probe.c)
 
 # ---- app：应用层 ----
 sdk_app_src(src/app/app_monitor.c)
+sdk_app_src(src/app/app_keeper.c)
 sdk_app_src(src/app/main.c)
 
 # ---- 固定 SES 调试器为 J-Link ----

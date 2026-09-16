@@ -24,6 +24,7 @@
 #include "drv_flash.h"
 #include "app_cfg.h"
 #include "app_monitor.h"
+#include "app_keeper.h"
 
 /**
  * @brief 启动流程
@@ -190,6 +191,7 @@ int main(void)
         dbg_probe_keep();        /* 兜住 J-Scope 探针符号，防止 --gc-sections 删除 */
         g_heart_main++;          /* 存活心跳：不递增说明主循环卡住了 */
         app_monitor_update();    /* 观测量 */
+        app_keeper_update();     /* 运行监护：把上电期的锁死类故障自动救回来 */
           
         if (motor_ban)
         {

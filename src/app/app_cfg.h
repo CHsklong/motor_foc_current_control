@@ -56,6 +56,28 @@
 #define ENC_SKIP_ALIGN    1   /* 1=跳过对齐，用下面的常量；0=每次上电对齐 */
 #define ENC_THETA_INITIAL 4.9862f   /* 实测的初始机械弧度 */
 
+/* ---------------- 运行监护 app_keeper（解决"冷上电不转 / 转过一次后就不转"） ----------------
+ * 背景：这套闭环里有三处"单向锁死"，一旦触发就再也回不来，而且代码里没有任何提示：
+ *   ① PWM 硬件故障锁存：pwm_init() 配的是 禁止硬件自动恢复、需软件清标志。
+ *      外部过流比较器在上电毛刺期拉一下低，六路输出就被永久钉死为 0；
+ *      此时 CPU、20kHz 中断、心跳全正常，只有 PWM 的 SR.FAULT 位能看出来。
+ *   ② MCL detect 回调 disable_output：判出任何故障（含上电瞬间的误判）就关断输出，没有恢复路径。
+ *   ③ 母线电压只在 motor_init() 里读一次，之后 const_vbus 不再刷新；
+ *      冷上电若在模拟前端没稳定时读到偏低值，后续所有电压限幅都偏小，力矩不足表现出"不转"。
+ * 前两类的触发窗口恰好在上电爬升期 —— 这正是"调试器下载后必转、重新上电不转"的来源。
+ * 监护的策略：**只有在 MCL 从未判定过真实故障（g_fault_src==0）时才自愈**；
+ * 一旦 MCL 明确判过 采样/环路/驱动/编码器 故障，就停机不自愈（宁可不转也不能烧功率级），
+ * 并把拒绝原因写进 g_keeper_blocked 供 J-Scope 查看。 */
+#define RUN_KEEPER_ENABLE    1   /* 1=在主循环里跑运行监护；0=完全关闭 */
+/** 下列子项仅在 RUN_KEEPER_ENABLE=1 时有效 */
+#define KEEPER_FAULT_AUTO_CLR 1  /* 1=自动清除 PWM 硬件故障锁存（无真实故障时） */
+#define KEEPER_OUT_AUTO_REC   1  /* 1=PWM 输出被意外关断时自动恢复 */
+#define KEEPER_LOOP_AUTO_REC  1  /* 1=控制环 status=fail 时软重启一次 */
+#define KEEPER_VBUS_RECHECK   1  /* 1=上电稳定后复核并修正母线电压 */
+#define KEEPER_START_DELAY_MS (1000)  /* 上电后先观察这么久再开始监护（ms），让起转/校准先跑完 */
+#define KEEPER_COOLDOWN_MS    (500)   /* 两次自愈动作之间的最小间隔 ms */
+#define KEEPER_MAX_ACTION     (8)     /* 自愈总次数上限，超过后停机待查；0=不限 */
+
 /* ---------------- FLASH 参数区 ---------------- */
 /** 1=运行时从片内 FLASH 读零点偏移（走 XIP 指针直读，不调任何 ROM API，零风险）；
     0=完全不碰 FLASH，直接用 ENC_THETA_INITIAL。 */

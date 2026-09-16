@@ -125,6 +125,9 @@ hpm_mcl_stat_t disable_all_pwm_output(void)
     pwmv2_enable_software_force(MOTOR0_BLDCPWM, BOARD_BLDC_WH_PWM_OUTPIN);
     pwmv2_enable_software_force(MOTOR0_BLDCPWM, BOARD_BLDC_WL_PWM_OUTPIN);
 
+    /* 注意 v2 这里 force 的是 output_1（高），与 v1 的 output_0（低）相反。
+       本工程 SoC(HPM5300) 走的是上面的 PWMv1 分支，这段暂未启用；
+       将来若切到带 PWMv2 的型号，必须先确认force 高电平不会造成上下桥直通。 */
     pwmv2_shadow_register_unlock(MOTOR0_BLDCPWM);
     pwmv2_force_output(MOTOR0_BLDCPWM, BOARD_BLDC_UH_PWM_OUTPIN, pwm_force_output_1, false);
     pwmv2_force_output(MOTOR0_BLDCPWM, BOARD_BLDC_UL_PWM_OUTPIN, pwm_force_output_1, false);
