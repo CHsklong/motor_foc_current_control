@@ -14,11 +14,14 @@ float vbus_low_threshold;
  *
  * hpm_mcl_detect_loop() 检查模拟量、控制环路、功率驱动、编码器各子模块状态。
  */
+volatile uint32_t g_sys_ms = 0;
+
 SDK_DECLARE_EXT_ISR_M(BOARD_BLDC_TMR_IRQ, isr_gptmr)
 void isr_gptmr(void)
 {
     if (gptmr_check_status(BOARD_BLDC_TMR_1MS, GPTMR_CH_CMP_IRQ_MASK(BOARD_BLDC_TMR_CH, BOARD_BLDC_TMR_CMP))) {
         gptmr_clear_status(BOARD_BLDC_TMR_1MS, GPTMR_CH_CMP_IRQ_MASK(BOARD_BLDC_TMR_CH, BOARD_BLDC_TMR_CMP));
+        g_sys_ms++;                          /* 真实毫秒时基 */
         hpm_mcl_detect_loop(&motor0.detect);
     }
 }

@@ -32,4 +32,15 @@ extern float fault_level;
  */
 void isr_adc(void);
 
+/**
+ * @brief 注册"主循环停滞"时的代办监护函数
+ * @param hook 由应用层实现的监护函数；NULL = 不启用
+ *
+ * main 一旦被 20kHz 中断饿死就完全得不到 CPU，而负责解除 PWM 锁存、恢复输出的
+ * 运行监护原本跑在 main 里 → 等于把唯一的救援通道堵死了。
+ * 注册后，20kHz 中断每 20ms 检查一次 main 心跳，发现停滞就代为调用该钩子，
+ * 保证自愈逻辑在最坏情况下依然执行得到。
+ */
+void ctrl_set_keeper_hook(void (*hook)(void));
+
 #endif /* CTRL_FOC_H */

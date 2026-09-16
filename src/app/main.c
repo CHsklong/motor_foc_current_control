@@ -83,6 +83,10 @@ int main(void)
 
 
     g_boot_step = 6U;
+    /* 注册"主循环停滞"代办：一旦 20kHz 节拍把 main 饿死，由中断代跑运行监护，
+       自愈通道不再依赖已经拿不到 CPU 的主循环。必须在使能中断之前完成。 */
+    ctrl_set_keeper_hook(app_keeper_update);
+
     board_delay_ms(PWM_FAULT_SETTLE_MS);   /* 先等比较器输出稳定，再判断 */
     if (pwm_fault_is_latched())
     {
@@ -217,7 +221,7 @@ int main(void)
 
           id.value = 0.5f;          // 阶跃到 0.5A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
-          board_delay_ms(1);
+          board_delay_ms(10);
           id.value = 0.0f;          // 阶跃到 0.0A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
         }

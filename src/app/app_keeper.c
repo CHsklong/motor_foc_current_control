@@ -4,6 +4,7 @@
  */
 #include "hw_map.h"
 #include "drv_pwm.h"
+#include "drv_timer.h"       /* g_sys_ms：真实毫秒时基，见 app_keeper_update 注释 */
 #include "sens_analog.h"
 #include "motor.h"
 #include "dbg_probe.h"
@@ -36,7 +37,7 @@ enum {
     KEEPER_CAUSE_VBUS_FIX    = 4    /* 修正了偏低的母线电压 */
 };
 
-static uint32_t s_tick_ms;          /* 调用计数，主循环约 1kHz，可直接当毫秒用 */
+static uint32_t s_tick_ms;          /* 当前毫秒时刻（取真实时基 g_sys_ms，见下） */
 static uint32_t s_cooldown_until;   /* 冷却结束时刻 */
 static uint32_t s_action_cnt;       /* 已执行的自愈动作总数 */
 static uint8_t  s_vbus_checked;     /* 母线电压复核是否已做过 */
@@ -94,7 +95,10 @@ static bool s_safe_to_recover(void)
 
 void app_keeper_update(void)
 {
-    s_tick_ms++;
+    /* 取真实毫秒时基，而不是"被调用了多少次"：
+       主循环正常时约 1kHz；一旦 main 被 20kHz 中断饿死，本函数改由节拍 ISR 代跑
+       （见 ctrl_set_keeper_hook），调用频率变成 50Hz，按次数计时会整体失真。 */
+    s_tick_ms = g_sys_ms;
 
     /* 上电刚开始的一段窗口不做任何干预：让零点校准、首次出力、滤波器收敛先跑完，
        否则监护会把正常的上电瞬态误判成故障去"救"。 */

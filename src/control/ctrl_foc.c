@@ -130,6 +130,101 @@ static uint32_t isr_cycles_per_us(void)
     return per_us;
 }
 
+/* ============ 节拍守护：窗口统计 / main 停滞接管 / 应急让路 =============
+ *
+ * 【为什么要这些】实测出现过"每一拍都超出 50us 预算"的持续状态：CPU 100% 吃在
+ * 20kHz 中断里，主循环一条指令都抢不到 → g_heart_main 冻结、系统看着像死机
+ * （g_boot_step=17 之后再没动过）。而那时负责自愈的运行监护恰恰跑在被饿死的
+ * main 里，等于把唯一的救援通道堵死了。
+ *
+ * 三道措施：
+ *   ① 窗口化计时（20ms 一窗）：把"开机以来的最大值"换成"本窗口最大值"，
+ *      从而区分启动瞬间的冷峰值与运行期反复出现的持续超载。
+ *   ② 停滞接管：每 20ms 检查 main 心跳还推不推进；不推进就由本 ISR 代跑
+ *      运行监护（解除 PWM 锁存、恢复输出仍有机会执行），不再依赖 main。
+ *   ③ 应急让路：连续 3 个窗口（60ms）仍停滞 → 每 4 拍跳过 1 次控制计算，
+ *      强行给 main 留出时间片，打破"越饿死越没人救"的死锁；main 恢复即退出。
+ */
+#define ISR_WINDOW_TICKS   (PWM_FREQUENCY / 50U)   /* 20ms 一个统计窗口 */
+#define ISR_RELIEF_DIV     (4U)                    /* 让路模式：每 4 拍跳过 1 拍 */
+#define ISR_STARVE_WIN_MAX (3U)                    /* 连续停滞几个窗口后开始让路 */
+
+static uint32_t s_win_ticks;
+static uint32_t s_win_over;
+static uint32_t s_win_isr_max;
+static uint32_t s_win_enc_max;
+static uint32_t s_win_loop_max;
+static uint32_t s_hm_last;        /* 上次检查时的 main 心跳值 */
+static uint32_t s_starve_win;     /* 连续检出 main 停滞的窗口数 */
+static uint8_t  s_relief;         /* 1 = 让路模式生效中 */
+static void (*s_keeper_hook)(void);   /* main 停摆时由 ISR 代办的运行监护 */
+
+/**
+ * @brief 注册运行监护钩子
+ * @param hook 监护函数（应用层实现），NULL 表示不启用
+ *
+ * 注册后，一旦检测到主循环停滞，本模块会在 20kHz 中断里代跑监护逻辑。
+ */
+void ctrl_set_keeper_hook(void (*hook)(void))
+{
+    s_keeper_hook = hook;
+}
+
+/** 每拍更新窗口统计；窗口结束时结算窗口峰值并做停滞检查 */
+static void isr_window_update(uint32_t dt, uint32_t budget)
+{
+    s_win_ticks++;
+    if (dt > budget) {
+        s_win_over++;
+    }
+    if (dt > s_win_isr_max) {
+        s_win_isr_max = dt;
+    }
+
+    if (s_win_ticks < ISR_WINDOW_TICKS) {
+        return;
+    }
+
+    /* ---- 窗口结算：只看本窗口，不再被开机冷峰值污染 ---- */
+    {
+        uint32_t per_us = isr_cycles_per_us();
+        g_isr_us_win_max  = s_win_isr_max / per_us;
+        g_enc_us_win_max  = s_win_enc_max / per_us;
+        g_loop_us_win_max = s_win_loop_max / per_us;
+        g_isr_win_over    = (s_win_over * 100U) / s_win_ticks;   /* 本窗口超时占比 % */
+        g_isr_win_cnt++;
+    }
+    s_win_ticks     = 0U;
+    s_win_over      = 0U;
+    s_win_isr_max   = 0U;
+    s_win_enc_max   = 0U;
+    s_win_loop_max  = 0U;
+
+    /* ---- 主循环还活着吗 ---- */
+    if (g_heart_main != s_hm_last)
+    {
+        s_hm_last   = g_heart_main;
+        s_starve_win = 0U;
+        s_relief     = 0U;              /* main 已恢复，退出让路 */
+        return;
+    }
+
+    s_starve_win++;
+    g_isr_starve_cnt++;
+
+    /* main 停摆：立即由中断代跑运行监护，保住自愈通道 */
+    if (s_keeper_hook != NULL) {
+        s_keeper_hook();
+    }
+
+    /* 连续停滞才开始让路——偶发的一两个窗口（如启动瞬间）不触发 */
+#if ISR_RELIEF_ENABLE
+    if (s_starve_win >= ISR_STARVE_WIN_MAX) {
+        s_relief = 1U;
+    }
+#endif
+}
+
 static void isr_timed_end(uint32_t t0)
 {
     uint32_t dt     = (uint32_t)hpm_csr_get_core_cycle() - t0;
@@ -151,6 +246,8 @@ static void isr_timed_end(uint32_t t0)
     /* 分段耗时：编码器段慢 → SPI 问题；环路段慢 → 控制计算问题 */
     g_enc_us_max  = g_enc_cycles_max / per_us;
     g_loop_us_max = g_loop_cycles_max / per_us;
+
+    isr_window_update(dt, budget);
 }
 
 void isr_adc(void)
@@ -174,6 +271,9 @@ void isr_adc(void)
             if (t_enc > g_enc_cycles_max) {
                 g_enc_cycles_max = t_enc;
             }
+            if (t_enc > s_win_enc_max) {
+                s_win_enc_max = t_enc;
+            }
         }
         hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
         hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    /* 实际采样为 C 相 */
@@ -191,7 +291,20 @@ void isr_adc(void)
 
         if (FOC_MODE)
         {
-            uint32_t t_loop = (uint32_t)hpm_csr_get_core_cycle();
+            /* 应急让路：main 已连续停滞时，每 4 拍跳过 1 拍完整控制计算，
+               强行给主循环留出执行时间，打破"没人救 → 一直饿死"的死锁 */
+            bool run_loop = true;
+        #if ISR_RELIEF_ENABLE
+            if (s_relief != 0U) {
+                if ((g_heart_isr & (ISR_RELIEF_DIV - 1U)) == 0U) {
+                    run_loop = false;
+                    g_isr_relief_cnt++;
+                }
+            }
+        #endif
+            if (run_loop)
+            {
+                uint32_t t_loop = (uint32_t)hpm_csr_get_core_cycle();
         #if FOC_POSITION_MODE
                     position_loop_pre();     /* 位置环：设定本拍动态限幅 */
         #endif
@@ -199,9 +312,13 @@ void isr_adc(void)
         #if FOC_POSITION_MODE
                     position_loop_post();    /* 位置环：抗饱和回退 + 观测刷新 */
         #endif
-            t_loop = (uint32_t)hpm_csr_get_core_cycle() - t_loop;
-            if (t_loop > g_loop_cycles_max) {
-                g_loop_cycles_max = t_loop;
+                t_loop = (uint32_t)hpm_csr_get_core_cycle() - t_loop;
+                if (t_loop > g_loop_cycles_max) {
+                    g_loop_cycles_max = t_loop;
+                }
+                if (t_loop > s_win_loop_max) {
+                    s_win_loop_max = t_loop;
+                }
             }
         }
     }
