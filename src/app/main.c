@@ -159,6 +159,7 @@ int main(void)
         id.value = 0.0f;
         hpm_mcl_loop_set_current_d(&motor0.loop, id); 
 
+
     }
 
     /* ===== 位置环 / 速度环必须互斥 */
@@ -185,13 +186,17 @@ int main(void)
         hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
     }
 
+
 /* ---- 主循环（约 1kHz）---- */
     while (1)
-    {
+    {   
+        g_heart_main++;
         dbg_probe_keep();        /* 兜住 J-Scope 探针符号，防止 --gc-sections 删除 */
-        g_heart_main++;          /* 存活心跳：不递增说明主循环卡住了 */
+
         app_monitor_update();    /* 观测量 */
+
         app_keeper_update();     /* 运行监护：把上电期的锁死类故障自动救回来 */
+
           
         if (motor_ban)
         {
@@ -200,16 +205,16 @@ int main(void)
             pwm_duty_set(mcl_drivers_chn_b, 0.5);
             pwm_duty_set(mcl_drivers_chn_c, 0.5);
         }
-        if(step_response)                   //电流环阶跃响应测试
+
+        if(1)                   //电流环阶跃响应测试
         {
 
-          id.value = 0.0f;          // 阶跃到 0.5A
+          id.value = 0.5f;          // 阶跃到 0.5A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
           board_delay_ms(1);
-          id.value = 0.5f;          // 阶跃到 0.0A
+          id.value = 0.0f;          // 阶跃到 0.0A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
         }
-
         board_delay_ms(1);
     }
 

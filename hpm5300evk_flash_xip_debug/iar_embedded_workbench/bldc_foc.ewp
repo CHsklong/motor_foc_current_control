@@ -2355,6 +2355,7 @@
             <file><name>$PROJ_DIR$\..\..\src\driver\drv_adc.c</name></file>
             <file><name>$PROJ_DIR$\..\..\src\driver\drv_timer.c</name></file>
             <file><name>$PROJ_DIR$\..\..\src\driver\drv_qei.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\driver\drv_flash.c</name></file>
           </group>
           <group><name>sensor</name>
             <file><name>$PROJ_DIR$\..\..\src\sensor\mt6835.c</name></file>
@@ -2374,6 +2375,7 @@
           </group>
           <group><name>app</name>
             <file><name>$PROJ_DIR$\..\..\src\app\app_monitor.c</name></file>
+            <file><name>$PROJ_DIR$\..\..\src\app\app_keeper.c</name></file>
             <file><name>$PROJ_DIR$\..\..\src\app\main.c</name></file>
           </group>
         </group>

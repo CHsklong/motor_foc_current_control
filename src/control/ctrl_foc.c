@@ -100,9 +100,33 @@ static void position_loop_post(void)
  * uq += w*pole_num*(Ld*iq+flux) 严重失真。
  */
 SDK_DECLARE_EXT_ISR_M(BOARD_BLDC_ADC_IRQn, isr_adc)
+/**
+ * @brief 20kHz 中断耗时统计
+ *
+ * 节拍预算是 1/PWM_FREQUENCY（20kHz → 50us）。一旦单拍超时：
+ *   - 下一次 ADC 触发紧接着就到，CPU 几乎全在中断里 → main 被饿死
+ *     （表现为 g_heart_isr 猛涨、g_heart_main 一动不动）；
+ *   - 控制时序抖动，电流环出力异常，电机异响或干脆不起转。
+ * 所以这个数字是判断"到底是 main 卡住，还是被中断饿死"的决定性依据。
+ */
+static void isr_timed_end(uint32_t t0)
+{
+    uint32_t dt     = (uint32_t)hpm_csr_get_core_cycle() - t0;
+    uint32_t budget = motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY;
+
+    g_isr_cycles_last = dt;
+    if (dt > g_isr_cycles_max) {
+        g_isr_cycles_max = dt;
+    }
+    if (dt > budget) {
+        g_isr_over_cnt++;    /* 超时拍数：持续增加就是节拍跑不完 */
+    }
+}
+
 void isr_adc(void)
 {
     uint32_t status;
+    uint32_t t0 = (uint32_t)hpm_csr_get_core_cycle();   /* 计时起点 */
     adc_v2_handle_t adc_u = HPM_ADC_V2_HANDLE(BOARD_BLDC_ADC_U_BASE);
 
     g_heart_isr++;   /* 存活心跳：J-Scope 里不递增即说明 20kHz 节拍根本没起来 */
@@ -141,4 +165,6 @@ void isr_adc(void)
         #endif
         }
     }
+
+    isr_timed_end(t0);
 }

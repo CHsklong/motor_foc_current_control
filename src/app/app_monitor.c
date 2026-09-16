@@ -35,5 +35,15 @@ void app_monitor_update(void)
     g_pwm_fault = pwm_fault_is_latched() ? 1U : 0U;
 
     /* 母线电压（const_vbus 指向 mcl_cfg 里的那个值，上电读一次后不再刷新） */
-    g_vbus = *motor0.loop.const_vbus;
+    g_vbus = motor0.cfg.mcl.physical.motor.vbus;
+
+    /* 20kHz 节拍耗时：周期数换算成 us（20kHz 的预算是 50us）。
+       main 被饿死时（g_heart_main 不涨）先看 g_isr_us_max 有没有顶到 50。 */
+    {
+        uint32_t khz = clock_get_frequency(clock_cpu0) / 1000U;
+        if (khz > 0U) {
+            g_isr_us_max  = g_isr_cycles_max / khz;
+            g_isr_us_last = g_isr_cycles_last / khz;
+        }
+    }
 }
