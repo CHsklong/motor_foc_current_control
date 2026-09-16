@@ -1,50 +1,48 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
+ */
+/**
+ * @file drv_adc.h
+ * @brief ADC 驱动：相电流/母线电压采样、DMA 缓冲、静态零点校准
+ */
+#ifndef DRV_ADC_H
+#define DRV_ADC_H
+
+#include "hw_map.h"
+
+/** ADC 抢占模式 DMA 缓冲区：[0]=U 相(ADC1) [1]=V 相(ADC0) */
+extern volatile uint32_t adc_buff[3][BOARD_BLDC_ADC_PMT_DMA_SIZE_IN_4BYTES];
+
+/** 静态零点校准值（上电时电机静止采样 200 次取平均） */
+extern uint32_t adc_u_midpoint;
+extern uint32_t adc_v_midpoint;
+
+/**
+ * @brief ADC 模块初始化：分辨率/转换模式/通道/触发/DMA
+ */
+hpm_mcl_stat_t adc_init(void);
+
+/**
+ * @brief 使能 ADC 转换完成中断（20kHz 电流环节拍源）
+ */
+void adc_isr_enable(void);
+
+/**
+ * @brief 静态零点校准
  *
+ * 必须在 PWM 无输出、电机静止时调用；连续采样 CURRENT_SET_TIME_MS 次取平均。
  */
-#ifndef HPM_DRV_ADC_H
-#define HPM_DRV_ADC_H
-
-#include <stdint.h>
-#include <stdbool.h>
+void motor_adc_midpoint(void);
 
 /**
- * @brief 外设驱动层 —— ADC（相电流 + 母线电压）
- *
- * 本层负责 ADC 模块、通道、触发矩阵、抢占队列与 DMA 搬运，以及"取 12bit 有效值"。
- * 电流/电压的物理换算、零漂校准属于 sensor 层，不在这里。
+ * @brief 把 PWM 触发信号路由到 ADC 模块
  */
-
-typedef enum {
-    drv_adc_chn_u = 0,   /* ADC 模块 U（硬件实际采 A 相电流） */
-    drv_adc_chn_v = 1,   /* ADC 模块 V（硬件实际采 C 相电流） */
-} drv_adc_chn_t;
-
-/* 从 ADC 结果字中取 12bit 有效数据（与 MCL_GET_ADC_12BIT_VALID_DATA 等价） */
-#define DRV_ADC_GET_12BIT(x)        (((x) & 0xffffU) >> 4)
+void init_trigger_mux(TRGM_Type *ptr);
 
 /**
- * @brief 初始化 ADC（模块/通道/触发矩阵/抢占队列/DMA）
+ * @brief 配置 ADC 抢占模式触发通道（U 相产生中断，V 相与母线不产生）
  */
-void drv_adc_init(void);
+void init_trigger_cfg(void);
 
-/**
- * @brief 使能 ADC 转换完成中断（相电流采样完成触发中断，用于驱动电流环）
- */
-void drv_adc_isr_enable(void);
-
-/**
- * @brief 读取相电流通道的原始 12bit 值
- */
-uint16_t drv_adc_read_phase_raw(drv_adc_chn_t chn);
-
-/**
- * @brief 软件触发一次母线电压采样并读取
- * @param[out] raw 12bit 原始值
- * @return true 成功；false 触发通道/ADC 通道布局校验失败
- */
-bool drv_adc_read_vbus_raw(uint16_t *raw);
-
-#endif /* HPM_DRV_ADC_H */
+#endif /* DRV_ADC_H */

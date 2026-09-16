@@ -1,27 +1,18 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
- *
  */
-#ifndef HPM_MOTOR_H
-#define HPM_MOTOR_H
-
-#include <stdint.h>
-#include <stdbool.h>
-#include "hpm_mcl_loop.h"
-#include "hpm_mcl_detect.h"
-
 /**
- * @brief 电机抽象层
- *
- * 把"一台电机"封装成对象：包含 MCL 的 encoder / analog / drivers / control / loop / detect
- * 六个子模块及其配置。上层（control / app）只通过本层接口操作电机，
- * 不直接接触 MCL 内部结构体。
- *
- * 本层同时负责把 sensor 与 driver 提供的语义化接口，适配成 MCL 要求的回调签名。
+ * @file motor.h
+ * @brief 电机抽象层：MCL 各子模块句柄聚合 + 参数整定 + 初始角对齐
  */
+#ifndef MOTOR_H
+#define MOTOR_H
 
+#include "hw_map.h"
+#include "motor_params.h"
+
+/** MCL 全部子模块句柄与配置的聚合体 */
 typedef struct {
     mcl_encoder_t encoder;
     mcl_filter_iir_df1_t encoder_iir;
@@ -31,7 +22,11 @@ typedef struct {
     mcl_control_t control;
     mcl_loop_t loop;
     mcl_detect_t detect;
-    struct {
+#if defined(MCL_HARDWARE_HYBRID_LOOP_ENABLE)
+    mcl_hw_loop_t hw_loop;
+#endif
+    struct
+    {
         mcl_cfg_t mcl;
         mcl_encoer_cfg_t encoder;
         mcl_filter_iir_df1_cfg_t encoder_iir;
@@ -41,85 +36,61 @@ typedef struct {
         mcl_control_cfg_t control;
         mcl_loop_cfg_t loop;
         mcl_detect_cfg_t detect;
+        mcl_hardware_clc_cfg_t clc;
+#if defined(MCL_HARDWARE_HYBRID_LOOP_ENABLE)
+        mcl_hw_loop_cfg_t hw_loop;
+#endif
     } cfg;
-} motor_t;
+} motor0_t;
 
-extern motor_t motor0;
+/** 全局电机实例（放 FAST_RAM，20kHz 中断高频访问） */
+extern motor0_t motor0;
+
+/** 强制注入的电角度（开环调试用） */
+extern mcl_user_value_t user_set_theta;
+
+/** ABZ 绝对位置角（硬件 QEI 路径用） */
+extern float abs_position_theta;
+
+/* ---------------- MCL 回调 ---------------- */
+void motor0_control_init(void);
 
 /**
- * @brief 初始化电机对象：装配参数、注册回调、初始化 MCL 各子模块
- * @note 调用前必须先完成 drv_pwm_clock_init()（需要 PWM 重载值）
+ * @brief 电机与 MCL 全参数初始化：物理参数、环周期、PI 增益、滤波器、回调注册
  */
 void motor_init(void);
 
 /**
- * @brief 获取 MCL 控制环句柄（供 control 层调用 MCL 算法）
- */
-mcl_loop_t *motor_get_loop(void);
-
-/**
- * @brief 获取母线电压(V)（初始化时实测，用于 SVPWM 调制与解耦前馈）
- */
-float motor_get_vbus(void);
-
-/**
- * @brief 设置 q 轴电流给定（转矩电流）
- */
-void motor_set_current_q(float iq);
-
-/**
- * @brief 设置 d 轴电流给定（励磁电流）
- */
-void motor_set_current_d(float id);
-
-/**
- * @brief 使能控制环（必须先使能，对齐阶段才会有电流输出）
- */
-void motor_enable_loop(void);
-
-/**
- * @brief 编码器状态更新（与电流环同频调用）
- */
-void motor_encoder_process(uint32_t tick);
-
-/**
- * @brief 获取一个电流环周期对应的 CPU tick 数
+ * @brief 速度环参数整定（切换到速度模式时调用）
  *
- * 编码器 M 法测速需要"距离上次调用过了多少个 CPU 周期"作为时间基准，
- * 传错会让速度成比例失真（在 1kHz 主循环里传 50us 会放大 20 倍）。
+ * 注意：会把电流环 PI 改成"旧公式"（带宽平方项），与 motor_init() 里的
+ * 标准整定不一致；切到速度模式前请确认这是你想要的。
  */
-uint32_t motor_get_loop_tick(void);
+void motor0_speed_loop_para_init(void);
 
 /**
- * @brief 直接设置零点偏移（跳过对齐时使用）
+ * @brief 位置环参数整定（切换到位置模式时调用）
+ *
+ * 当前未被 main() 调用，位置环增益以 motor_init() 里的配置为准。
  */
-void motor_set_initial_theta(float theta);
+void motor0_position_loop_para_init(void);
 
 /**
- * @brief 获取零点偏移
+ * @brief 选择闭环结构
+ *
+ * MCL 的 hpm_mcl_current_foc_loop() 里两个环是串联的：
+ *   - enable_position_loop=false 时，exec_ref.speed 被强制置 0；
+ *   - enable_position_loop=true 但 ref_position.enable=false 时，位置环**照样在跑**，
+ *     把 ref_position 取成 exec_ref.position(通常为 0)、反馈取成连续多圈角，
+ *     于是 err 是个巨大负值 → 输出饱和 → 积分顶死，同时每拍多一次 SPI 读编码器。
+ *     跑速度环时这是纯粹的副作用，必须关掉。
+ * 所以速度环模式一定要显式关掉位置环，不能"两个都 enable 靠给定开关切换"。
  */
-float motor_get_initial_theta(void);
+void motor_set_loop_mode(motor_loop_mode_t mode);
 
 /**
- * @brief 故障检测循环（由 1ms 定时器滴答驱动）
+ * @brief 编码器初始角对齐（三段式：大电流吸合 → 中电流 → 小电流）
  */
-void motor_detect_loop(void);
+void motor_angle_align(void);
 
-/**
- * @brief 使能 / 关闭 PWM 输出
- */
-void motor_enable_output(void);
-void motor_disable_output(void);
-
-/**
- * @brief 设置某相占空比（供开环 SVPWM 使用）
- */
-void motor_set_duty_raw(uint8_t phase, float duty);
-
-/**
- * @brief 读取 A/B 相电流物理值（单位 A）
- * @note 必须按 A → B 顺序读取：B 相由 A+C 重构，依赖 A 相的采样缓存
- */
-bool motor_get_phase_current(float *ia, float *ib);
-
-#endif /* HPM_MOTOR_H */
+#endif /* MOTOR_H */

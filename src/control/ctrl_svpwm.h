@@ -1,41 +1,45 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
+ */
+/**
+ * @file ctrl_svpwm.h
+ * @brief SVPWM 调制与开环拖动
+ */
+#ifndef CTRL_SVPWM_H
+#define CTRL_SVPWM_H
+
+#include "hw_map.h"
+
+/** 母线电压（V），SVPWM 归一化用 */
+extern float Vdc;
+
+/** 开环给定电压矢量幅值（归一化到 Vdc 的比例） */
+extern float Vref;
+
+/** 三相占空比输出（MCL 结构体形式） */
+extern mcl_control_svpwm_duty_t svpwm_duty;
+
+/** 三相占空比观测值（J-Scope） */
+extern float svpwma;
+extern float svpwmb;
+extern float svpwmc;
+
+/**
+ * @brief 标准七段式 SVPWM：αβ 电压 → 三相占空比
  *
+ * @param u_alpha α 轴电压
+ * @param u_beta  β 轴电压
+ * @param Vdc     母线电压
+ * @param duty_a/b/c 输出占空比 0~1
  */
-#ifndef HPM_CTRL_SVPWM_H
-#define HPM_CTRL_SVPWM_H
-
-#include <stdint.h>
+void svpwm(float u_alpha, float u_beta, float Vdc, float *duty_a, float *duty_b, float *duty_c);
 
 /**
- * @brief 控制算法层 —— 开环 SVPWM
+ * @brief 开环拖动一个步进（SVPWM_MODE=1 时由电流环中断调用）
  *
- * 用自行递增的虚拟电角度生成旋转电压矢量，不依赖编码器与电流采样。
- * 用途：验证相序、PWM 输出极性与功率级是否正常，是定位"不转"问题的第一步。
+ * 内含软启动：电频率按 FREQ_RAMP_STEP 爬升到目标频率，避免启动冲击。
  */
+void svpwm_openloop_step(void);
 
-/* 开环运行参数 */
-#define CTRL_SVPWM_VDC_DEFAULT      (36.0f)    /* 母线电压(V) */
-#define CTRL_SVPWM_VREF             (2.0f)     /* 给定电压矢量幅值 */
-#define CTRL_SVPWM_TARGET_FREQ      (15.0f)    /* 目标电频率(Hz) */
-#define CTRL_SVPWM_RAMP_STEP        (0.0005f)  /* 每步电频率增量（软启动） */
-
-/**
- * @brief 开环步进：由电流环中断按 PWM 频率调用
- */
-void ctrl_svpwm_step(void);
-
-/**
- * @brief 获取最近一次计算的三相占空比
- */
-float ctrl_svpwm_get_duty(uint8_t phase);
-
-/**
- * @brief 标准七段式 SVPWM 计算（不依赖 MCL，可独立使用）
- */
-void ctrl_svpwm_calc(float u_alpha, float u_beta, float vdc,
-                     float *duty_a, float *duty_b, float *duty_c);
-
-#endif /* HPM_CTRL_SVPWM_H */
+#endif /* CTRL_SVPWM_H */

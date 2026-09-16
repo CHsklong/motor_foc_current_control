@@ -1,37 +1,29 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
- *
  */
+#include "hw_map.h"
 #include "drv_timer.h"
-#include "board.h"
-#ifdef HPMSOC_HAS_HPMSDK_GPTMRV2
-#include "hpm_gptmrv2_drv.h"
-#else
-#include "hpm_gptmr_drv.h"
-#endif
+#include "motor.h"
 
-/* 滴答回调：由上层（control 层）注册，避免 driver 反向依赖 motor */
-static void (*s_tick_callback)(void) = NULL;
+float vbus_t;
+float vbus_low_threshold;
 
-void drv_timer_register_tick_callback(void (*cb)(void))
-{
-    s_tick_callback = cb;
-}
-
+/**
+ * @brief 1ms 定时器中断：轮询 MCL 故障检测
+ *
+ * hpm_mcl_detect_loop() 检查模拟量、控制环路、功率驱动、编码器各子模块状态。
+ */
 SDK_DECLARE_EXT_ISR_M(BOARD_BLDC_TMR_IRQ, isr_gptmr)
 void isr_gptmr(void)
 {
     if (gptmr_check_status(BOARD_BLDC_TMR_1MS, GPTMR_CH_CMP_IRQ_MASK(BOARD_BLDC_TMR_CH, BOARD_BLDC_TMR_CMP))) {
         gptmr_clear_status(BOARD_BLDC_TMR_1MS, GPTMR_CH_CMP_IRQ_MASK(BOARD_BLDC_TMR_CH, BOARD_BLDC_TMR_CMP));
-        if (s_tick_callback != NULL) {
-            s_tick_callback();
-        }
+        hpm_mcl_detect_loop(&motor0.detect);
     }
 }
 
-void drv_timer_init(void)
+void timer_init(void)
 {
     gptmr_channel_config_t config;
 

@@ -1,51 +1,144 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
- *
  */
-#include "ctrl_foc.h"
-#include "ctrl_svpwm.h"
+#include "hw_map.h"
 #include "motor.h"
+#include "motor_params.h"
+#include "drv_pwm.h"
 #include "drv_adc.h"
-#include "board.h"
-#include "hpm_adc_v2.h"
+#include "sens_encoder.h"
+#include "sens_analog.h"
+#include "ctrl_svpwm.h"
+#include "ctrl_foc.h"
+#include "hpm_mcl_control.h"
+#include "dbg_probe.h"
+#include "app_cfg.h"
+#include <math.h>
 
-static volatile bool s_encoder_update_enable = false;
+float g_ia = 0.0f;  /* A 相采样电流 A */
+float g_ib = 0.0f;  /* B 相采样电流 A */
+float g_ic = 0.0f;  /* C 相采样电流 A */
+float speed_rad_s;  /* 机械角速度 rad/s */
+float rpm;          /* 转/分钟 */
+float fault_level;
 
-void ctrl_foc_encoder_update_enable(bool enable)
+#if FOC_POSITION_MODE
+static float s_pos_vlim = 0.0f;          /* 本拍位置环输出限幅 */
+static float s_pos_integral_prv = 0.0f;  /* 本拍位置环执行前的积分值 */
+
+/** hpm_mcl_loop() 之前调用：按剩余距离设定本拍输出限幅（接近限速） */
+static void position_loop_pre(void)
 {
-    s_encoder_update_enable = enable;
+    mcl_control_pid_t *p = &motor0.cfg.control.position_pid_cfg;
+    float out_max = BOARD_BLDC_SW_FOC_POSITION_OUTPUT_MAX;
+    float err  = g_pos_ref - g_pos_abs;
+    float aerr = ((err >= 0.0f) ? err : -err) - POS_ARRIVE_DEADBAND;
+
+    s_pos_integral_prv = p->integral;
+
+    /* 以减速度 POS_DECEL_MAX 从当前位置刚好停到目标的速度上限。
+       死区是"对误差的抵扣"而不是硬开关，所以跨过死区边界时限幅从 0 连续长起来。 */
+    if (aerr <= 0.0f)
+    {
+        s_pos_vlim = 0.0f;                              /* 到位：输出 0，积分在 post 里泄放 */
+    }
+    else
+    {
+        float v = sqrtf(2.0f * POS_DECEL_MAX * aerr);   /* 接近限速 */
+        s_pos_vlim = (v < out_max) ? v : out_max;
+    }
+
+    p->cfg.output_max =  s_pos_vlim;
+    p->cfg.output_min = -s_pos_vlim;
+
+    g_pos_err = err;
 }
 
-void ctrl_foc_init(void)
+/** hpm_mcl_loop() 之后调用：抗饱和回退与到位后的积分泄放 */
+static void position_loop_post(void)
 {
-    drv_adc_isr_enable();
-}
+    mcl_control_pid_t *p = &motor0.cfg.control.position_pid_cfg;
+    float out = motor0.loop.exec_ref.speed;   /* 位置环本拍输出（速度给定） */
 
+    if (s_pos_vlim <= 0.0f)
+    {
+        /* 到位：输出 0，积分线性泄放到 0，
+           避免减速段攒下的积分在下次微小扰动时把电机推离目标 */
+        float i = p->integral;
+        if (i > POS_INTEGRAL_LEAK)
+        {
+            p->integral = i - POS_INTEGRAL_LEAK;
+        }
+        else if (i < -POS_INTEGRAL_LEAK)
+        {
+            p->integral = i + POS_INTEGRAL_LEAK;
+        }
+        else
+        {
+            p->integral = 0.0f;
+        }
+    }
+    else if (((out >=  s_pos_vlim - 0.001f) || (out <= -s_pos_vlim + 0.001f))
+             && (g_pos_err * out > 0.0f))
+    {
+        /* 撞限幅且误差还在同方向推：撤销本拍的积分累加 */
+        p->integral = s_pos_integral_prv;
+    }
+
+    g_pos_integral = p->integral;
+    g_ref_speed    = out;
+}
+#endif
+
+/**
+ * @brief ADC 转换完成中断 —— 整个电机控制的节拍源（20kHz）
+ *
+ * 编码器角度必须与电流环同频更新：放在主循环里只有 ~1kHz，
+ * 而且传给 hpm_mcl_encoder_process() 的 tick 是按 50us 算的，
+ * 速度会被放大约 20 倍，导致预测角和 dq 解耦前馈
+ * uq += w*pole_num*(Ld*iq+flux) 严重失真。
+ */
 SDK_DECLARE_EXT_ISR_M(BOARD_BLDC_ADC_IRQn, isr_adc)
 void isr_adc(void)
 {
     uint32_t status;
     adc_v2_handle_t adc_u = HPM_ADC_V2_HANDLE(BOARD_BLDC_ADC_U_BASE);
 
+    g_heart_isr++;   /* 存活心跳：J-Scope 里不递增即说明 20kHz 节拍根本没起来 */
+
     status = hpm_adc_v2_get_status_flags(adc_u);
-    if ((status & HPM_ADC_V2_EVENT_TRIG_COMPLETE) != 0) {
+    if ((status & HPM_ADC_V2_EVENT_TRIG_COMPLETE) != 0)
+    {
         hpm_adc_v2_clear_status_flags(adc_u, HPM_ADC_V2_EVENT_TRIG_COMPLETE);
 
-        /* 编码器角度必须和电流环同频(20kHz)更新。
-           若放在主循环里只有 ~1kHz，而 tick 仍按 50us 传，速度会被放大约 20 倍，
-           导致预测角与 dq 解耦前馈 uq += ω·pole_num·(Ld·iq+flux) 严重失真。 */
-        if (s_encoder_update_enable) {
-            motor_encoder_process(motor_get_loop_tick());
+        if (g_encoder_isr_enable) 
+        {
+            hpm_mcl_encoder_process(&motor0.encoder, motor0.cfg.mcl.physical.time.mcu_clock_tick / PWM_FREQUENCY);
+        }
+        hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
+        hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    /* 实际采样为 C 相 */
+        g_ic = -g_ia - g_ib;
+        speed_rad_s = motor0.encoder.result.speed;                    /* 机械角速度 rad/s */
+        rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI);  /* 转/分钟 */
+
+        /* 实际机械角速度探针：必须在 20kHz 里刷新，否则 J-Scope HSS 采到的是冻结值 */
+        g_spd_fdb = motor0.encoder.result.speed;
+
+        if (SVPWM_MODE) 
+        {
+            svpwm_openloop_step();
         }
 
-#if CTRL_FOC_SVPWM_MODE
-        ctrl_svpwm_step();
-#endif
-
-#if CTRL_FOC_CURRENT_MODE
-        hpm_mcl_loop(motor_get_loop());
-#endif
+        if (FOC_MODE) 
+        {
+        #if FOC_POSITION_MODE
+                    position_loop_pre();     /* 位置环：设定本拍动态限幅 */
+        #endif
+                    hpm_mcl_loop(&motor0.loop);  /* 电流环 / 速度环 / 位置环 */
+        #if FOC_POSITION_MODE
+                    position_loop_post();    /* 位置环：抗饱和回退 + 观测刷新 */
+        #endif
+        }
     }
 }

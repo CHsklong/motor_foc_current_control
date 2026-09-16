@@ -1,52 +1,38 @@
 /*
- * Copyright (c) 2021-2026 HPMicro
- *
+ * Copyright (c) 2026 HPMicro
  * SPDX-License-Identifier: BSD-3-Clause
+ */
+/**
+ * @file sens_analog.h
+ * @brief 模拟量传感器层：相电流换算、母线电压读取（MCL 回调）
+ */
+#ifndef SENS_ANALOG_H
+#define SENS_ANALOG_H
+
+#include "hw_map.h"
+
+/**
+ * @brief MCL 回调：取某一路模拟量的物理值
  *
+ * analog_a_current：U 相电流（A）；
+ * analog_b_current：由 A、C 两路重构的 B 相电流（硬件实际采的是 A 相与 C 相）。
  */
-#ifndef HPM_SENS_ANALOG_H
-#define HPM_SENS_ANALOG_H
-
-#include <stdint.h>
-#include <stdbool.h>
+hpm_mcl_stat_t adc_value_get(mcl_analog_chn_t chn, int32_t *value);
 
 /**
- * @brief 传感器接口层 —— 模拟量采样（相电流 + 母线电压）
+ * @brief MCL 回调：更新采样点位置（本工程采样点由 PWM 比较器固定，无需调整）
+ */
+hpm_mcl_stat_t analog_update_sample_location(mcl_analog_chn_t chn, uint32_t tick);
+
+/**
+ * @brief 软件触发一次母线电压采样并返回电压值
+ * @return 母线电压 V；读取失败返回 -1.0f
  *
- * 职责边界：把 ADC 码值换算成"带物理意义"的量，并负责零漂校准。
- * 电流的 Park 变换、PI 调节属于 control 层，不在这里。
+ * 注意：内部有 20us 忙等，禁止在 20kHz 中断里调用。
  */
+float read_vbus(void);
 
-/* 零漂校准采样次数（每次间隔 1ms） */
-#define SENS_CURRENT_CAL_MS     (200)
+/** 单次读取可能因首帧未落定而失败，最多重试这么多次 */
+#define VBUS_READ_RETRY (5U)
 
-/**
- * @brief 零漂校准：在上电时 PWM 未输出、相电流为零的状态下取平均
- * @note 必须在 PWM 输出使能之前调用，否则会采到真实电流导致零点漂移
- */
-void sens_current_calibrate(void);
-
-/**
- * @brief 读取 A 相电流（已减去零漂的 ADC 码值）
- */
-bool sens_current_read_phase_a(int32_t *value);
-
-/**
- * @brief 读取 B 相电流（已减去零漂的 ADC 码值）
- *
- * @note 硬件实际采样 A 相与 C 相，B 相由 Ia+Ib+Ic=0 重构，
- *       因此必须先调用 sens_current_read_phase_a() 再调用本函数。
- */
-bool sens_current_read_phase_b(int32_t *value);
-
-/**
- * @brief 读取母线电压
- * @return 母线电压(V)；读取失败返回 -1.0f
- */
-float sens_vbus_read(void);
-
-/* 零漂校准值（J-Scope 可观测） */
-extern volatile uint32_t adc_u_midpoint;
-extern volatile uint32_t adc_v_midpoint;
-
-#endif /* HPM_SENS_ANALOG_H */
+#endif /* SENS_ANALOG_H */
