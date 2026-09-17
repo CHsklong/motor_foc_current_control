@@ -20,6 +20,7 @@
 #include "motor_hw_foc.h"
 #include "ctrl_foc.h"
 #include "ctrl_svpwm.h"
+#include "traj_s_curve.h"
 #include "dbg_probe.h"
 #include "drv_flash.h"
 #include "app_cfg.h"
@@ -152,8 +153,10 @@ int main(void)
 
 /* ---- 运行模式给定 ---- */
     mcl_user_value_t user_speed;      /* 速度环速度给定 */
-    mcl_user_value_t position;        /* 位置环位置给定 */
     mcl_user_value_t id, iq;          /* 电流环电流给定 */
+#if !SCURVE_ENABLE
+    mcl_user_value_t position;        /* 位置环位置给定（S 曲线模式下由规划器逐拍刷新 g_pos_ref） */
+#endif
     if (FOC_CURRENT_MODE)
     {
 
@@ -170,22 +173,49 @@ int main(void)
     }
 
     /* ===== 位置环 / 速度环必须互斥 */
-    float pos_debug;
+#if !SCURVE_ENABLE
+    float pos_debug = 0.0f;
+#endif
+#if SCURVE_ENABLE
+    uint32_t sc_dwell = 0U;     /* 到位后的停留计数（主循环约 1ms 一次） */
+    float    sc_dir   = 1.0f;   /* 往复运动方向 */
+#endif
     g_boot_step = 17U;
     if (FOC_POSITION_MODE)
     {
-        user_speed.enable = false;      /* 防止速度给定盖掉位置环输出 */
-        user_speed.value  = 0.0f;
-        hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
         motor0.cfg.control.position_pid_cfg.integral = 0.0f;   /* 位置环积分清零 */
 
         encoder_abs_rebase();           /* 以当前机械位置为 0 基准 */
+
+#if SCURVE_ENABLE
+        /* S 曲线模式下位置外环由 ctrl_foc.c 自建（速度前馈 + P/PI 修正），
+           MCL 自带的 position_loop 必须关掉：它直接把输出写进 exec_ref.speed，
+           中间没有前馈注入点，而 ref_speed 一旦 enable 又是整体覆盖而非叠加。 */
+        motor0.cfg.loop.enable_position_loop = false;
+
+        scurve_init(1.0f / (float)PWM_FREQUENCY, SCURVE_VMAX, SCURVE_AMAX, SCURVE_JMAX);  /*约束值设置*/
+        scurve_reset(0.0f);             /* 规划器输出对齐到刚 rebase 的 0 基准 */
+
+        /* 前馈结构下外环 P 增益单独整定 */
+        motor0.cfg.control.position_pid_cfg.cfg.kp = SCURVE_POS_KP;
+
+        /* 速度给定改由 ctrl_foc.c 每 4kHz 下发，这里必须先把 ref_speed 置为有效，
+           否则速度环会取 exec_ref.speed（位置环关闭时恒为 0），电机不转。 */
+        user_speed.enable = true;
+        user_speed.value  = 0.0f;
+        hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
+        g_pos_ref = 0.0f;
+#else
+        user_speed.enable = false;      /* 防止速度给定盖掉位置环输出 */
+        user_speed.value  = 0.0f;
+        hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
 
         /* 目标取"相对基准的增量"：方向唯一确定，不会因多圈角回绕而反向 */
         position.enable = true;
         position.value  = 0;      //POS_TARGET_DELTA;   /* 相对基准的位置增量POS_TARGET_DELTA（机械角 rad） */
         hpm_mcl_loop_set_position(&motor0.loop, position);
         g_pos_ref = position.value;
+#endif
     }
     else if (FOC_SPEED_MODE)
     {
@@ -238,12 +268,27 @@ int main(void)
         }
         if(step_response_p)
         { 
-          pos_debug += 5;
-          board_delay_ms(2000);
-          encoder_abs_rebase();           /* 以当前机械位置为 0 基准 */
-          position.value = pos_debug;
-          g_pos_ref = position.value;
-          hpm_mcl_loop_set_position(&motor0.loop, position);
+#if SCURVE_ENABLE
+            /* S 曲线往复：走完一段 → 停留 SCURVE_DWELL_MS → 反向再走一段。
+               规划器忙时（scurve_move_delta 返回 -1）不打断，等它走完再发下一条。
+               J-Scope 看 g_pos_ref / g_sc_v_ref / g_sc_a_ref 应分别是三次/梯形/
+               分段恒定的形状；g_sc_move_cnt 每次往复 +1。 */
+            if (sc_dwell > 0U) {
+                sc_dwell--;
+            } else if (scurve_is_idle()) {
+                if (scurve_move_delta(sc_dir * POS_TARGET_DELTA) == 0) {
+                    sc_dir = -sc_dir;
+                }
+                sc_dwell = SCURVE_DWELL_MS;
+            }
+#else
+            pos_debug += 5;
+            board_delay_ms(2000);
+            encoder_abs_rebase();           /* 以当前机械位置为 0 基准 */
+            position.value = pos_debug;
+            g_pos_ref = position.value;
+            hpm_mcl_loop_set_position(&motor0.loop, position);
+#endif
         }
         g_main_step = 5U;        /* 5=1ms 延时段 */
         board_delay_ms(1);

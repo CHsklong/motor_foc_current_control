@@ -11,6 +11,7 @@
 #include "sens_analog.h"
 #include "ctrl_svpwm.h"
 #include "ctrl_foc.h"
+#include "traj_s_curve.h"
 #include "hpm_mcl_control.h"
 #include "dbg_probe.h"
 #include "app_cfg.h"
@@ -23,7 +24,150 @@ float speed_rad_s;  /* 机械角速度 rad/s */
 float rpm;          /* 转/分钟 */
 float fault_level;
 
-#if FOC_POSITION_MODE
+#if FOC_POSITION_MODE && SCURVE_ENABLE
+/* ==================== S 曲线规划 + 位置外环（前馈 + 修正） ====================
+ *
+ * 【为什么必须换成前馈结构】
+ * 原来那套"接近限速"是靠误差反推速度上限：vlim = sqrt(2*POS_DECEL_MAX*|err|)。
+ * 阶跃给定时 err 很大，vlim 一上来就被 output_max 夹住 → 全速跑；
+ * err 变小 vlim 自然收紧 —— 这本身就是一条粗糙的减速曲线，所以能跑通。
+ * 但换成 S 曲线后 err 天生很小（参考本来就在缓慢移动），
+ * sqrt(2*150*err) 会反过来把速度给定掐死在几 rad/s，规划器形同虚设。
+ * 所以 S 曲线模式下速度给定改为：
+ *
+ *   v_cmd = S 曲线速度前馈 v_ff          （主体，运动学可行性由规划器保证）
+ *         + 加速度前馈 SCURVE_ACC_FF_TAU * a_ff   （补速度环的一阶滞后）
+ *         + 位置外环 P/PI 修正 out       （只补模型误差与扰动）
+ *
+ * 修正器输出限幅从 30rad/s 收到 POS_CORR_MAX：它的职责是"修正"不是"驱动"，
+ * 这样即便前馈算错，电机也不会跑飞。
+ *
+ * 【为什么关掉 MCL 自带的位置环】
+ * MCL 的 position_pid 输出直接写进 exec_ref.speed，中间没有前馈注入点；
+ * 而 ref_speed 一旦 enable 又会整体覆盖 exec_ref.speed（不是叠加）。
+ * 所以本模式下 main() 会把 enable_position_loop 置 false，改由这里按 4kHz
+ * 自己调 hpm_mcl_position_pid()，加完前馈再用 hpm_mcl_loop_set_speed() 下发。
+ * 副作用：MCL 不再替我们调 encoder_get_abs_theta()，这里自己调（同为 4kHz，
+ * SPI 开销与原来一致）。
+ *
+ * 【POS_LOOP_DIV 必须是 5 而不是 20】
+ * hpm_mcl_loop_init() 里有一处指针别名：
+ *     loop->const_time.position_ts = &mcl_cfg->physical.time.speed_loop_ts;
+ * 即 MCL 的位置环实际跑在 speed_loop_ts(250us, 4kHz) 上，不是 position_loop_ts(1ms)。
+ * 位置环 ki 是按 Ts=2.5e-4 整定的，这里必须保持 5 分频，否则等效积分增益差 4 倍。
+ */
+static uint8_t s_pos_decim;          /* 20kHz -> 4kHz 分频计数 */
+static float   s_v_cmd;              /* 本拍最终速度给定 rad/s */
+static float   s_corr;               /* 本拍位置外环修正量（原始值）rad/s */
+static float   s_corr_lp;            /* 修正量低通输出（实际叠加进速度给定）rad/s */
+static float   s_corr_alpha;         /* 低通系数（首次调用时按 SCURVE_CORR_FC 算好） */
+static float   s_pos_integral_prv;   /* 本拍外环执行前的积分值 */
+
+/** hpm_mcl_loop() 之前：推进 S 曲线 → 位置外环 → 下发速度给定 */
+static void position_loop_pre(void)                             /*S 曲线轨迹跟踪 + 前馈 + 受限 PID 修正 + 滤波*/
+{
+    mcl_control_pid_t *p = &motor0.cfg.control.position_pid_cfg;
+    mcl_user_value_t   cmd;
+    float pos_fb, err, out;
+
+    /* ---- 1) 位置参考 = S 曲线输出（取代原来的阶跃给定）---- */
+    g_pos_ref = g_sc.p;
+
+    /* ---- 2) 位置外环 4kHz ---- */
+    if (++s_pos_decim < POS_LOOP_DIV) 
+    {
+        return;
+    }
+    s_pos_decim = 0;
+
+    if (encoder_get_abs_theta(&pos_fb) != mcl_success) 
+    {
+        pos_fb = g_pos_abs;          /* 偶发读失败：沿用上一拍 */
+    }
+    g_pos_abs = pos_fb;
+
+    err = g_pos_ref - pos_fb;
+    g_pos_err = err;
+    s_pos_integral_prv = p->integral;
+
+    /* 修正器权限：只给"修正权"，主体速度由前馈出 */
+    p->cfg.output_max =  POS_CORR_MAX;
+    p->cfg.output_min = -POS_CORR_MAX;
+
+    hpm_mcl_position_pid(g_pos_ref, pos_fb, p, &out);
+    s_corr = out;
+
+    /* 修正量一阶低通（4kHz）：把修正里的高频毛刺滤掉再叠加进速度给定。
+       外环交点在几 Hz 量级，30Hz 的低通对它几乎无相位损失，
+       但能把"打摆"的高频成分和编码器量化毛刺挡在速度环外面。
+       设 SCURVE_CORR_FC=0 可旁路（完全等价于不做滤波）。 */
+    if (SCURVE_CORR_FC > 0.0f)                            /* 低通滤波 */
+    {
+        if (s_corr_alpha == 0.0f) 
+        {
+            float w = 2.0f * MCL_PI * SCURVE_CORR_FC * (MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY) * POS_LOOP_DIV);
+            s_corr_alpha = w / (1.0f + w);
+        }
+        s_corr_lp += s_corr_alpha * (out - s_corr_lp);
+    } else 
+    {
+        s_corr_lp = out;
+    }
+
+    /* 前馈 + 修正，再按"规划速度 + 修正权限"做总限幅 */
+    s_v_cmd = s_corr_lp + g_sc.v + SCURVE_ACC_FF_TAU * g_sc.a;
+    if (s_v_cmd >  SCURVE_V_CMD_MAX) { s_v_cmd =  SCURVE_V_CMD_MAX; }
+    if (s_v_cmd < -SCURVE_V_CMD_MAX) { s_v_cmd = -SCURVE_V_CMD_MAX; }
+
+    cmd.enable = true;               /* 必须 enable，否则速度环会取 exec_ref.speed(=0) */
+    cmd.value  = s_v_cmd;
+    hpm_mcl_loop_set_speed(&motor0.loop, cmd);
+}
+
+/** hpm_mcl_loop() 之后：抗饱和回退 + 到位后的积分泄放 + 探针刷新 */
+static void position_loop_post(void)
+{
+    mcl_control_pid_t *p = &motor0.cfg.control.position_pid_cfg;
+    float aerr = ((g_pos_err >= 0.0f) ? g_pos_err : -g_pos_err) - POS_ARRIVE_DEADBAND;
+
+    if (((s_corr >=  POS_CORR_MAX - 0.001f) || (s_corr <= -POS_CORR_MAX + 0.001f))
+        && (g_pos_err * s_corr > 0.0f))
+    {
+        /* 修正撞限幅且误差还在同方向推：撤销本拍的积分累加 */
+        p->integral = s_pos_integral_prv;
+    }
+
+    if ((g_sc.state != SCURVE_RUN) && (aerr <= 0.0f))
+    {
+        /* 到位：积分线性泄放到 0，避免残余积分在下次扰动时把电机推离目标 */
+        float i = p->integral;
+        if (i > POS_INTEGRAL_LEAK) {
+            p->integral = i - POS_INTEGRAL_LEAK;
+        } else if (i < -POS_INTEGRAL_LEAK) {
+            p->integral = i + POS_INTEGRAL_LEAK;
+        } else {
+            p->integral = 0.0f;
+        }
+    }
+
+    g_pos_integral = p->integral;
+    g_ref_speed    = s_v_cmd;
+
+    /* ---- S 曲线探针（4kHz 刷新，J-Scope 直接看规划器在干什么）---- */
+    g_sc_t       = scurve_elapsed();
+    g_sc_v_ref   = g_sc.v;
+    g_sc_a_ref   = g_sc.a;
+    g_sc_v_cmd   = s_v_cmd;
+    g_sc_corr    = s_corr;
+    g_sc_state   = (uint32_t)g_sc.state;
+    g_sc_shape   = (uint32_t)g_sc.shape;
+    g_sc_t_all   = g_sc.t_all;
+    g_sc_vp      = g_sc.vp;
+    g_sc_move_cnt = g_sc.move_cnt;
+    g_sc_busy_cnt = g_sc.busy_cnt;
+}
+#elif FOC_POSITION_MODE
+/* ============ 原逻辑：阶跃给定 + 接近限速（SCURVE_ENABLE=0 的回退路径） ============ */
 static float s_pos_vlim = 0.0f;          /* 本拍位置环输出限幅 */
 static float s_pos_integral_prv = 0.0f;  /* 本拍位置环执行前的积分值 */
 
@@ -258,6 +402,12 @@ void isr_adc(void)
 
     g_heart_isr++;   /* 存活心跳：J-Scope 里不递增即说明 20kHz 节拍根本没起来 */
 
+#if FOC_POSITION_MODE && SCURVE_ENABLE
+    /* S 曲线的时间基准：必须每拍都走，不能被"应急让路"跳拍带偏，
+       否则轨迹时间会相对真实时间变慢。放在中断最前面。 */
+    scurve_isr_tick();
+#endif
+
     status = hpm_adc_v2_get_status_flags(adc_u);
     if ((status & HPM_ADC_V2_EVENT_TRIG_COMPLETE) != 0)
     {
@@ -306,7 +456,7 @@ void isr_adc(void)
             {
                 uint32_t t_loop = (uint32_t)hpm_csr_get_core_cycle();
         #if FOC_POSITION_MODE
-                    position_loop_pre();     /* 位置环：设定本拍动态限幅 */
+                    position_loop_pre();     /* 位置环：设定本拍动态限幅 */  /* 前馈给定S型曲线的参考输入 */
         #endif
                     hpm_mcl_loop(&motor0.loop);  /* 电流环 / 速度环 / 位置环 */
         #if FOC_POSITION_MODE

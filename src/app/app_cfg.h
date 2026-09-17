@@ -18,8 +18,20 @@
 #define SVPWM_MODE        0    /* 开环 SVPWM 拖动（不带反馈，用于验证功率级） */
 #define FOC_MODE          1    /* FOC 闭环总开关（下面的模式依赖它） */
 #define FOC_CURRENT_MODE  0    /* 电流环：直接给 id/iq */
-#define FOC_SPEED_MODE    1    /* 速度环：给机械角速度 rad/s */
-#define FOC_POSITION_MODE 0    /* 位置环：给相对基准的位置增量 rad */
+#define FOC_SPEED_MODE    0    /* 速度环：给机械角速度 rad/s */
+#define FOC_POSITION_MODE 1    /* 位置环：给相对基准的位置增量 rad */
+
+/**
+ * S 型加减速（jerk 受限）轨迹规划开关
+ *
+ * 1=位置给定由 S 曲线规划器逐拍生成，外环改为"速度前馈 + P/PI 修正"；
+ *   此时 MCL 自带的 position_loop 被关掉（main() 里置 enable_position_loop=false），
+ *   由 ctrl_foc.c 自己按 4kHz 调 hpm_mcl_position_pid()。
+ * 0=回到原来的"阶跃给定 + 接近限速"逻辑，用于对比/回退。
+ *
+ * 参数（vmax / amax / jmax / 前馈系数 / 修正权限）全部在 motor_params.h 末尾。
+ */
+#define SCURVE_ENABLE     1
 
 #if (FOC_CURRENT_MODE + FOC_SPEED_MODE + FOC_POSITION_MODE) > 1
 #error "FOC_CURRENT_MODE / FOC_SPEED_MODE / FOC_POSITION_MODE 同时只能有一个为 1"
@@ -108,8 +120,8 @@
 /* ---------------- 调试开关 ---------------- */
 #define motor_ban         0   /* 闭环静止模式 */
 #define step_response_c   0   /* 电流环阶跃响应测试 */
-#define step_response_s   1   /* 速度环阶跃响应测试 */
-#define step_response_p   0   /* 位置环阶跃响应测试 */
+#define step_response_s   0   /* 速度环阶跃响应测试 */
+#define step_response_p   1   /* 位置环 S 曲线往复运动测试 */
 
 
 #endif /* APP_CFG_H */
