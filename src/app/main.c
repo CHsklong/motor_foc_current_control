@@ -170,6 +170,7 @@ int main(void)
     }
 
     /* ===== 位置环 / 速度环必须互斥 */
+    float pos_debug;
     g_boot_step = 17U;
     if (FOC_POSITION_MODE)
     {
@@ -182,14 +183,14 @@ int main(void)
 
         /* 目标取"相对基准的增量"：方向唯一确定，不会因多圈角回绕而反向 */
         position.enable = true;
-        position.value  = POS_TARGET_DELTA;   /* 相对基准的位置增量（机械角 rad） */
+        position.value  = 0;      //POS_TARGET_DELTA;   /* 相对基准的位置增量POS_TARGET_DELTA（机械角 rad） */
         hpm_mcl_loop_set_position(&motor0.loop, position);
         g_pos_ref = position.value;
     }
     else if (FOC_SPEED_MODE)
     {
         user_speed.enable = true;
-        user_speed.value = 50;    /* 机械角速度 rad/s */
+        user_speed.value = 10;    /* 机械角速度 rad/s */
         hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
     }
 
@@ -202,7 +203,7 @@ int main(void)
         dbg_probe_keep();        /* 兜住 J-Scope 探针符号，防止 --gc-sections 删除 */
 
         app_monitor_update();    /* 观测量 */
-
+        
         g_main_step = 2U;        /* 2=运行监护段 */
         app_keeper_update();     /* 运行监护：把上电期的锁死类故障自动救回来 */
 
@@ -216,14 +217,33 @@ int main(void)
         }
 
         g_main_step = 4U;        /* 4=电流环阶跃测试块 */
-        if(1)                   //电流环阶跃响应测试
+        if(step_response_c)                   //电流环阶跃响应测试
         {
-
+        
           id.value = 0.5f;          // 阶跃到 0.5A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
           board_delay_ms(10);
           id.value = 0.0f;          // 阶跃到 0.0A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
+        }
+        if(step_response_s)
+        {
+          board_delay_ms(2000);
+          if(user_speed.value<=50)
+          {
+            user_speed.value += 10;    /* 机械角速度 rad/s */
+          }
+          g_ref_speed = user_speed.value;
+          hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
+        }
+        if(step_response_p)
+        { 
+          pos_debug += 5;
+          board_delay_ms(2000);
+          encoder_abs_rebase();           /* 以当前机械位置为 0 基准 */
+          position.value = pos_debug;
+          g_pos_ref = position.value;
+          hpm_mcl_loop_set_position(&motor0.loop, position);
         }
         g_main_step = 5U;        /* 5=1ms 延时段 */
         board_delay_ms(1);

@@ -17,8 +17,8 @@
 /* ---------------- 运行模式 ---------------- */
 #define SVPWM_MODE        0    /* 开环 SVPWM 拖动（不带反馈，用于验证功率级） */
 #define FOC_MODE          1    /* FOC 闭环总开关（下面的模式依赖它） */
-#define FOC_CURRENT_MODE  1    /* 电流环：直接给 id/iq */
-#define FOC_SPEED_MODE    0    /* 速度环：给机械角速度 rad/s */
+#define FOC_CURRENT_MODE  0    /* 电流环：直接给 id/iq */
+#define FOC_SPEED_MODE    1    /* 速度环：给机械角速度 rad/s */
 #define FOC_POSITION_MODE 0    /* 位置环：给相对基准的位置增量 rad */
 
 #if (FOC_CURRENT_MODE + FOC_SPEED_MODE + FOC_POSITION_MODE) > 1
@@ -50,7 +50,7 @@
 #define PWM_FAULT_SETTLE_MS (10)
 
 /* ---------------- 位置环目标 ---------------- */
-#define POS_TARGET_DELTA  (1.0f * MCL_PI)
+#define POS_TARGET_DELTA  (12.5f * MCL_PI)
 
 
 #define ENC_SKIP_ALIGN    1   /* 1=跳过对齐，用下面的常量；0=每次上电对齐 */
@@ -107,6 +107,9 @@
 
 /* ---------------- 调试开关 ---------------- */
 #define motor_ban         0   /* 闭环静止模式 */
-#define step_response     1   /* 电流环阶跃响应测试 */
+#define step_response_c   0   /* 电流环阶跃响应测试 */
+#define step_response_s   1   /* 速度环阶跃响应测试 */
+#define step_response_p   0   /* 位置环阶跃响应测试 */
+
 
 #endif /* APP_CFG_H */

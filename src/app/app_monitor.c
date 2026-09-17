@@ -18,7 +18,7 @@ void app_monitor_update(void)
 
     /* 位置环观测：给定、反馈、误差、位置环输出的速度给定 */
     g_pos_err   = g_pos_ref - g_pos_abs;
-    g_ref_speed = motor0.loop.exec_ref.speed;
+    //g_ref_speed = motor0.loop.exec_ref.speed;
 
     /* 位置环积分项,单位是 "rad·拍" ,判断是否抗饱和。 */
     g_pos_integral = motor0.cfg.control.position_pid_cfg.integral;

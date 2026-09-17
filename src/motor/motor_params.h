@@ -53,8 +53,8 @@ typedef enum {
 #undef BOARD_BLDC_SW_FOC_POSITION_KP
 #undef BOARD_BLDC_SW_FOC_POSITION_KI
 
-#define BOARD_BLDC_HW_FOC_SPEED_KP (0.01f)
-#define BOARD_BLDC_HW_FOC_SPEED_KI (0.001f)
+#define BOARD_BLDC_HW_FOC_SPEED_KP (0.015f)
+#define BOARD_BLDC_HW_FOC_SPEED_KI (0.0005f)
 /* 速度环 PI（2026-09-11 重算）
  * 依据：Kt = 1.5 * pole_num * flux = 1.5*4*0.009 = 0.054 N·m/A，J = 6.2e-6 kg·m^2
  *       => Kt/J = 8710 (rad/s)/A ；速度环 4kHz，Ts = 250us
