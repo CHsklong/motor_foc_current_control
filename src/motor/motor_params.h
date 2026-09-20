@@ -72,8 +72,13 @@ typedef enum {
  * 旧值 kp=0.0074/ki=0.0001 对应 ωn≈59rad/s(9.4Hz)、ζ≈0.55 —— 太软，
  * 起步阶段几乎不出转矩，是"顿一下再起转"的主因。
  * 若实测带载惯量远大于 6.2e-6，kp/ki 按 J 同比例放大。 */
-#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP (0.02f)
-#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KI (0.00008f)
+/* 速度环 PI（2026-09-18 修正：抑制阶跃超调）
+ * 实测 kp=0.02 / ki=8e-5 时 30rad/s 阶跃超调达 44%，且稳态振荡 —— 实际负载/延迟
+ * 比理论模型大，15Hz 带宽过高。继续降带宽：kp 降到 0.015，ki 降到 0.00003，
+ * 牺牲一点响应速度换取阶跃无超调。纯阶跃无斜坡时，抑制超调只能靠压低带宽。
+ * 若响应过慢或静差大：再逐步回调 ki 到 5e-5；若仍超调：继续降 kp 到 0.01。 */
+#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KP (0.012f)
+#define BOARD_BLDC_SW_FOC_SPEED_LOOP_SPEED_KI (0.00005f)
 
 /* 位置环 PI
  *

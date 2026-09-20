@@ -18,8 +18,8 @@
 #define SVPWM_MODE        0    /* 开环 SVPWM 拖动（不带反馈，用于验证功率级） */
 #define FOC_MODE          1    /* FOC 闭环总开关（下面的模式依赖它） */
 #define FOC_CURRENT_MODE  0    /* 电流环：直接给 id/iq */
-#define FOC_SPEED_MODE    0    /* 速度环：给机械角速度 rad/s */
-#define FOC_POSITION_MODE 1    /* 位置环：给相对基准的位置增量 rad */
+#define FOC_SPEED_MODE    1    /* 速度环：给机械角速度 rad/s */
+#define FOC_POSITION_MODE 0    /* 位置环：给相对基准的位置增量 rad */
 
 /**
  * S 型加减速（jerk 受限）轨迹规划开关
@@ -117,11 +117,27 @@
  *        然后改回 0 重新烧录。调试器下载不擦末尾 sector，参数会保留。 */
 #define FLASH_PARAM_CALIB_ONCE   0
 
+/* ---------------- CAN 通信（MCAN0 / CANalyst-II / CANTest，500kbps） ----------------
+ * 1=使能：100ms 周期遥测(0x201)，接收速度/位置命令(0x101/0x102)与连通性测试(0x100)。
+ *   使能后 main 循环里的阶跃自动测试块(step_response_s/p)不再自动跑，电机由 CAN 命令控制；
+ *   PA00/PA01 会被配成 CAN 引脚（与 UART0 控制台复用，printf 失效，调试走 J-Scope）。
+ * 0=关闭：恢复原阶跃测试逻辑与串口控制台。协议表见 can/can_app.c 文件头。 */
+#define CAN_CTRL_ENABLE   1
+
+/* CAN 波特率（kHz）：必须与 CANTest 里设置的完全一致。
+ * 板上 U5(SN65HVD234) 的 RS 脚接了 R26=47K（斜率控制模式），压摆率约 4~6V/us，
+ * 理论上 500k 可用；若 500k 完全收不到帧，把它改成 250 或 100 并把 CANTest 同步改，
+ * 用来判断是不是压摆率受限（能通就说明该把 R26 换成 0R 走高速模式）。 */
+#define CAN_BAUDRATE_KHZ  500
+
+
+#define CAN_LOOPBACK_TEST 0
+
 /* ---------------- 调试开关 ---------------- */
 #define motor_ban         0   /* 闭环静止模式 */
 #define step_response_c   0   /* 电流环阶跃响应测试 */
-#define step_response_s   0   /* 速度环阶跃响应测试 */
-#define step_response_p   1   /* 位置环 S 曲线往复运动测试 */
+#define step_response_s   1   /* 速度环阶跃响应测试（CAN_CTRL_ENABLE=1 时不自动跑） */
+#define step_response_p   0   /* 位置环 S 曲线往复运动测试（CAN_CTRL_ENABLE=1 时不自动跑） */
 
 
 #endif /* APP_CFG_H */

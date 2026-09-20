@@ -1,0 +1,8 @@
+# 编译/工具缓存
+hpm5300evk_flash_xip_debug/.cache/
+**/.cache/
+**/clangd/
+**/segger_embedded_studio/*.emProject.bak
+
+# 如果整个 build 目录都不想跟踪
+hpm5300evk_flash_xip_debug/

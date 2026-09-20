@@ -45,6 +45,45 @@ void motor0_control_init(void)
 {
 }
 
+/** 带 back-calculation 抗饱和的速度环 PI。
+ *  MCL 默认 hpm_mcl_control_pi() 的积分在输出被限幅后仍继续累加，
+ *  会在阶跃响应中造成严重 windup：给定到 50 后实际速度仍被积分继续往上顶。
+ *  本函数在输出饱和时把"超出限幅的部分"从积分里扣掉，从根本上消除 windup。
+ *  函数签名与 MCL method.speed_pid 一致，通过 callback 替换默认算法。 */
+static hpm_mcl_stat_t speed_pi_anti_windup(hpm_mcl_type_t ref, hpm_mcl_type_t sens,
+                                           mcl_control_pid_t *pid_x, hpm_mcl_type_t *output)
+{
+    float err = (float)ref - (float)sens;
+    float out_unsat;
+    float out;
+
+    /* 诊断探针：速度环"实际收到的给定 / 看到的反馈 / 算出的误差"。
+       若 g_spd_ref_in 不是主循环写入的值，说明给定链路被覆盖；
+       若 g_speed_err 为负而电机仍加速，说明输出链路被旁路。 */
+    g_spd_ref_in = (float)ref;
+    g_speed_err  = err;
+
+    pid_x->integral += pid_x->cfg.ki * err;
+    MCL_VALUE_LIMIT(pid_x->integral, pid_x->cfg.integral_min, pid_x->cfg.integral_max);
+
+    out_unsat = pid_x->cfg.kp * err + pid_x->integral;
+
+    if (out_unsat > pid_x->cfg.output_max) {
+        out = pid_x->cfg.output_max;
+        pid_x->integral -= (out_unsat - pid_x->cfg.output_max);
+    } else if (out_unsat < pid_x->cfg.output_min) {
+        out = pid_x->cfg.output_min;
+        pid_x->integral += (pid_x->cfg.output_min - out_unsat);
+    } else {
+        out = out_unsat;
+    }
+
+    MCL_VALUE_LIMIT(pid_x->integral, pid_x->cfg.integral_min, pid_x->cfg.integral_max);
+    *output = (hpm_mcl_type_t)out;
+    g_iq_ref = out;   /* J-Scope 探针：速度环输出 = iq 电流给定 */
+    return mcl_success;
+}
+
 void motor_init(void)
 {
     motor0.cfg.mcl.physical.board.analog[analog_a_current].adc_reference_vol = 3.3;  /* A 相 ADC 参考电压 */
@@ -122,6 +161,7 @@ void motor_init(void)
     motor0.cfg.encoder_iir_mat[1].scale = 0.000994943924200649039424337871651005116f;
 
     motor0.cfg.control.callback.init = motor0_control_init;
+    motor0.cfg.control.callback.method.speed_pid = &speed_pi_anti_windup;
 
     /* ---- 电流环 PI ---- */
     motor0.cfg.control.currentd_pid_cfg.cfg.integral_max = 100;                  /* 积分限幅 */

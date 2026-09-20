@@ -50,6 +50,7 @@ sdk_app_src(src/motor/motor_hw_foc.c)
 # ---- control：控制算法层 ----
 sdk_app_src(src/control/ctrl_svpwm.c)
 sdk_app_src(src/control/ctrl_foc.c)
+sdk_app_src(src/control/traj_s_curve.c)
 
 # ---- debug：J-Scope 探针（横切层）----
 sdk_app_src(src/debug/dbg_probe.c)

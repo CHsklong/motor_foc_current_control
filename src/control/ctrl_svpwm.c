@@ -18,7 +18,7 @@ float svpwmc;
 /* 开环拖动状态 */
 static float target_freq = 5.0f;    /* 目标电频率 Hz */
 static float current_freq = 0.0f;   /* 当前电频率 Hz */
-volatile static float theta = 0.0f; /* 开环电角度 */
+static volatile float theta = 0.0f; /* 开环电角度（static 必须在最前，否则 -Wold-style-declaration） */
 
 #define FREQ_RAMP_STEP  0.0005f     /* 每个 PWM 周期的电频率增量 */
 

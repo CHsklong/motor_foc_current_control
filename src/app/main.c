@@ -26,6 +26,7 @@
 #include "app_cfg.h"
 #include "app_monitor.h"
 #include "app_keeper.h"
+#include "can_app.h"
 
 /**
  * @brief 启动流程
@@ -112,8 +113,13 @@ int main(void)
     g_boot_step = 12U;
     mt6835_seq3_init();                 /*角度读取*/
 
+    can_app_init();                     /* CAN（MCAN0, 500kbps）：CANTest 遥测与命令 */
+
     g_boot_step = 13U;
-    hpm_mcl_loop_enable(&motor0.loop);  /* 使能控制环（对齐需要出力） */
+    /* 只有"对齐路径"才需要提前出力；skip 对齐路径必须等角度应用完再使能，*/
+    if (!(ENC_SKIP_ALIGN && (theta_init > 0.0f))) {
+        hpm_mcl_loop_enable(&motor0.loop);  /* 使能控制环（对齐需要出力） */
+    }
 
 /* ---- 角度对齐 ---- */
     int theta_need_save = 0;            /* 1=本次跑了对齐，需要把结果存进 FLASH */
@@ -173,10 +179,10 @@ int main(void)
     }
 
     /* ===== 位置环 / 速度环必须互斥 */
-#if !SCURVE_ENABLE
+#if !SCURVE_ENABLE && !CAN_CTRL_ENABLE
     float pos_debug = 0.0f;
 #endif
-#if SCURVE_ENABLE
+#if SCURVE_ENABLE && !CAN_CTRL_ENABLE
     uint32_t sc_dwell = 0U;     /* 到位后的停留计数（主循环约 1ms 一次） */
     float    sc_dir   = 1.0f;   /* 往复运动方向 */
 #endif
@@ -202,7 +208,7 @@ int main(void)
         /* 速度给定改由 ctrl_foc.c 每 4kHz 下发，这里必须先把 ref_speed 置为有效，
            否则速度环会取 exec_ref.speed（位置环关闭时恒为 0），电机不转。 */
         user_speed.enable = true;
-        user_speed.value  = 0.0f;
+        user_speed.value  = 0.0f;         //做阶跃为0
         hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
         g_pos_ref = 0.0f;
 #else
@@ -220,7 +226,7 @@ int main(void)
     else if (FOC_SPEED_MODE)
     {
         user_speed.enable = true;
-        user_speed.value = 10;    /* 机械角速度 rad/s */
+        user_speed.value = 0;    /* 机械角速度 rad/s */
         hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
     }
 
@@ -236,6 +242,9 @@ int main(void)
         
         g_main_step = 2U;        /* 2=运行监护段 */
         app_keeper_update();     /* 运行监护：把上电期的锁死类故障自动救回来 */
+
+        g_main_step = 22U;       /* 22=CAN 段：取命令 + 100ms 遥测（CAN_CTRL_ENABLE=0 时空实现） */
+        can_app_poll();
 
         g_main_step = 3U;        /* 3=motor_ban 分支 */
         if (motor_ban)
@@ -256,10 +265,11 @@ int main(void)
           id.value = 0.0f;          // 阶跃到 0.0A
           hpm_mcl_loop_set_current_d(&motor0.loop, id);
         }
+#if !CAN_CTRL_ENABLE   /* CAN 使能时电机由 CANTest 命令控制，阶跃自动测试不跑 */
         if(step_response_s)
         {
           board_delay_ms(2000);
-          if(user_speed.value<=50)
+          if(user_speed.value<50)
           {
             user_speed.value += 10;    /* 机械角速度 rad/s */
           }
@@ -267,7 +277,7 @@ int main(void)
           hpm_mcl_loop_set_speed(&motor0.loop, user_speed);
         }
         if(step_response_p)
-        { 
+        {
 #if SCURVE_ENABLE
             /* S 曲线往复：走完一段 → 停留 SCURVE_DWELL_MS → 反向再走一段。
                规划器忙时（scurve_move_delta 返回 -1）不打断，等它走完再发下一条。
@@ -290,6 +300,7 @@ int main(void)
             hpm_mcl_loop_set_position(&motor0.loop, position);
 #endif
         }
+#endif /* !CAN_CTRL_ENABLE */
         g_main_step = 5U;        /* 5=1ms 延时段 */
         board_delay_ms(1);
     }
