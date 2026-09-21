@@ -18,8 +18,8 @@
 #define SVPWM_MODE        0    /* 开环 SVPWM 拖动（不带反馈，用于验证功率级） */
 #define FOC_MODE          1    /* FOC 闭环总开关（下面的模式依赖它） */
 #define FOC_CURRENT_MODE  0    /* 电流环：直接给 id/iq */
-#define FOC_SPEED_MODE    1    /* 速度环：给机械角速度 rad/s */
-#define FOC_POSITION_MODE 0    /* 位置环：给相对基准的位置增量 rad */
+#define FOC_SPEED_MODE    0    /* 速度环：给机械角速度 rad/s */
+#define FOC_POSITION_MODE 1    /* 位置环：给相对基准的位置增量 rad */
 
 /**
  * S 型加减速（jerk 受限）轨迹规划开关
@@ -61,8 +61,10 @@
  *  （上电稳定期已经把模拟前端等稳了，这里只需覆盖"故障输入刚使能"的毛刺） */
 #define PWM_FAULT_SETTLE_MS (10)
 
-/* ---------------- 位置环目标 ---------------- */
-#define POS_TARGET_DELTA  (12.5f * MCL_PI)
+/* ---------------- 位置环目标 ----------------
+ * 原为 12.5π≈39.27rad（约 6.25 圈）@25rad/s，单程 1.78s，配合打满的修正器会持续
+ * 出大力 → 上电即过流。先收到 1 圈(2π)做安全首测；确认波形稳定后再逐步加回去。 */
+#define POS_TARGET_DELTA  (12.0f * MCL_PI)
 
 
 #define ENC_SKIP_ALIGN    1   /* 1=跳过对齐，用下面的常量；0=每次上电对齐 */
@@ -122,7 +124,7 @@
  *   使能后 main 循环里的阶跃自动测试块(step_response_s/p)不再自动跑，电机由 CAN 命令控制；
  *   PA00/PA01 会被配成 CAN 引脚（与 UART0 控制台复用，printf 失效，调试走 J-Scope）。
  * 0=关闭：恢复原阶跃测试逻辑与串口控制台。协议表见 can/can_app.c 文件头。 */
-#define CAN_CTRL_ENABLE   1
+#define CAN_CTRL_ENABLE   0
 
 /* CAN 波特率（kHz）：必须与 CANTest 里设置的完全一致。
  * 板上 U5(SN65HVD234) 的 RS 脚接了 R26=47K（斜率控制模式），压摆率约 4~6V/us，
@@ -136,8 +138,21 @@
 /* ---------------- 调试开关 ---------------- */
 #define motor_ban         0   /* 闭环静止模式 */
 #define step_response_c   0   /* 电流环阶跃响应测试 */
-#define step_response_s   1   /* 速度环阶跃响应测试（CAN_CTRL_ENABLE=1 时不自动跑） */
-#define step_response_p   0   /* 位置环 S 曲线往复运动测试（CAN_CTRL_ENABLE=1 时不自动跑） */
+#define step_response_s   0   /* 速度环阶跃响应测试（CAN_CTRL_ENABLE=1 时不自动跑） */
+#define step_response_p   1   /* 位置环 S 曲线运动测试（CAN_CTRL_ENABLE=1 时不自动跑） */
+
+/** S 曲线测试的运动方式（仅 step_response_p=1 且 SCURVE_ENABLE=1 时有效）
+ *
+ * 1=往复：走完 POS_TARGET_DELTA → 停留 SCURVE_DWELL_MS → 取反方向再走一段，无限循环。
+ *   用于换向/耐久测试。J-Scope 上 g_sc_move_cnt 持续递增、g_pos_ref 在 0↔±D 之间来回。
+ * 0=单向单次（默认）：只走 POS_TARGET_DELTA 一次，完成后位置环把终点保持住。
+ *   用于观察一条完整的 S 曲线：g_sc_v_ref 是一个完整梯形、g_sc_a_ref 分段恒定、
+ *   g_pos_ref 是一段三次曲线。判据：g_sc_move_cnt 恒为 1、g_sc_state 最后停在 DONE(2)。
+ *   起点 = encoder_abs_rebase() 建立的 0 基准，所以终点恰为 +POS_TARGET_DELTA。
+ *
+ * 注：起始的第一次运动要等 SCURVE_DWELL_MS 之后才发（sc_dwell 初值即该值），
+ *     这段 800ms 是留给你把 J-Scope 采样跑起来的窗口。 */
+#define SCURVE_REPEAT_ENABLE  0
 
 
 #endif /* APP_CFG_H */

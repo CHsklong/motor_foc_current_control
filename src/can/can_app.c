@@ -78,8 +78,8 @@ volatile uint32_t g_can_src_clk_khz = 0U;   /* board_init_can_clock 返回的 CA
 
 /* ---------------- 接收环形缓冲（ISR 写 / 主循环读，单生产者单消费者） ---------------- */
 static mcan_rx_message_t s_rx_msg[CAN_RX_RING_DEPTH];
-static volatile uint32_t s_rx_w = 0U;   /* ISR 写指针 */
-static volatile uint32_t s_rx_r = 0U;   /* 主循环读指针 */
+static volatile uint32_t s_rx_w = 0U;   /*写指针 */
+static volatile uint32_t s_rx_r = 0U;   /*环读指针*/
 
 static volatile bool     s_echo_pending = false;      /* 0x100 测试帧待应答 */
 static uint8_t           s_echo_payload[4];
@@ -117,15 +117,15 @@ void can_app_isr(void)                                  //中断只做搬运
     if ((flags & MCAN_INT_RXFIFO0_NEW_MSG) != 0U) 
     {                                                 //读到空为止
         for (;;) {
-            mcan_rx_message_t rx;
+            mcan_rx_message_t rx;                             //读取pc发来的数据
             if (mcan_read_rxfifo(BOARD_APP_CAN_BASE, 0, &rx) != status_success) 
             {
                 break;                      /* FIFO 读空 */
             }
             uint32_t next = (s_rx_w + 1U) % CAN_RX_RING_DEPTH;
-            if (next != s_rx_r) 
+            if (next != s_rx_r)                 
             {
-                s_rx_msg[s_rx_w] = rx;
+                s_rx_msg[s_rx_w] = rx;                  //存进环形缓冲
                 s_rx_w = next;
             } else 
             {

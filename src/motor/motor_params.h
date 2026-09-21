@@ -110,11 +110,15 @@ typedef enum {
  * 更早的 SDK 原值 kp=154.7/ki=0.113/integral_max=10 更是完全不匹配弧度反馈）：
  *   kp=154.7 → 误差 0.25rad 就把速度给顶到 output_max，等效 bang-bang，起步"顿一下"；
  *   integral_max=10 → 积分项最多贡献 0.113×10=1.13rad/s，远不够克服摩擦。 */
-#define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KP (0.05f)
-#define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KI (0.001f)
+#define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KP (0.012f)
+#define BOARD_BLDC_SW_FOC_POSITION_LOOP_SPEED_KI (0.00005f)
 #define BOARD_BLDC_HW_FOC_POSITION_KP (34.7f)
 #define BOARD_BLDC_HW_FOC_POSITION_KI (0.113f)
 #define BOARD_BLDC_SW_FOC_POSITION_KP (20.0f)
+/* ki 2026-09-20 降：0.025(Ki_eff=100) 配 kp=10 时闭环阻尼比只有 0.39（特征方程
+ * 0.024s^3+s^2+10s+100，τ=速度环 24ms），实测 1.8Hz 欠阻尼振荡、到位超调 1 格。
+ * 降到 0.012（Ki_eff=48），配合 SCURVE_POS_KP=4，ζ 回到 0.5 以上。
+ * 积分作用只剩到位末端补摩擦（integral≈42 即可出 0.5rad/s），够用。 */
 #define BOARD_BLDC_SW_FOC_POSITION_KI (0.025f)
 
 /* 位置环输出限幅：输出是"速度给定"，上限取 30rad/s（约 286rpm），

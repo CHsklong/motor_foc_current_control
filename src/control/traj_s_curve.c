@@ -39,21 +39,25 @@ static void scurve_shape(const scurve_t *s, float t, float *pp, float *vv, float
     float tj   = s->tj;
     float ta   = s->ta;
 
-    if (t <= 0.0f) {
+    if (t <= 0.0f)                                //段前
+    {
         *pp = 0.0f; *vv = 0.0f; *aa = 0.0f;
         return;
     }
-    if (t >= ta) {
+    if (t >= ta)                                  //段后
+    {
         *pp = s->d_acc; *vv = s->vp; *aa = 0.0f;
         return;
     }
 
-    if (t < tj) {
+    if (t < tj) 
+    {
         /* ① 加加速：a = jmax*t，v = 1/2*jmax*t^2，p = 1/6*jmax*t^3 */
         *aa = jmax * t;
         *vv = 0.5f * jmax * t * t;
         *pp = (jmax * t * t * t) / 6.0f;
-    } else if (t < (ta - tj)) {
+    } else if (t < (ta - tj)) 
+    {
         /* ② 匀加速：以 tj 时刻的 (p1, v1) 为初值做匀加速直线外推 */
         float x  = t - tj;
         float v1 = 0.5f * jmax * tj * tj;              /* = 0.5 * ap * tj */
@@ -61,7 +65,8 @@ static void scurve_shape(const scurve_t *s, float t, float *pp, float *vv, float
         *aa = s->ap;
         *vv = v1 + s->ap * x;
         *pp = p1 + v1 * x + 0.5f * s->ap * x * x;
-    } else {
+    } else 
+    {
         /* ③ 减加速：利用加速段速度曲线的中心对称性 v(ta-t) = vp - v(t)，
               位移用"整段位移减去剩余部分"求，避免再递归一次形状函数。
               剩余部分 = vp*u - p_shape(u)，而此处 u <= tj，p_shape(u)=jmax*u^3/6。 */
@@ -81,29 +86,31 @@ static void scurve_shape(const scurve_t *s, float t, float *pp, float *vv, float
  *   v(t) = dir * v_shape(u)                      （方向与加速段相同，为正）
  *   a(t) = -dir * a_shape(u)                     （减速，符号相反）
  */
-static void scurve_eval_at(const scurve_t *s, float t, float *pp, float *vv, float *aa)
+static void scurve_eval_at(const scurve_t *s, float t, float *pp, float *vv, float *aa)       //计算取值
 {
     float ps, vs, as;
 
-    if (t <= 0.0f) {
+    if (t <= 0.0f) 
+    {
         *pp = s->p0; *vv = 0.0f; *aa = 0.0f;
         return;
     }
-    if (t >= s->t_all) {
+    if (t >= s->t_all) 
+    {
         *pp = s->p0 + s->delta; *vv = 0.0f; *aa = 0.0f;
         return;
     }
 
-    if (t < s->ta) {
+    if (t < s->ta) {                                      //加速段
         scurve_shape(s, t, &ps, &vs, &as);
         *pp = s->p0 + s->dir * ps;
         *vv = s->dir * vs;
         *aa = s->dir * as;
-    } else if (t < (s->ta + s->tv)) {
+    } else if (t < (s->ta + s->tv)) {                     //匀速段
         *pp = s->p0 + s->dir * (s->d_acc + s->vp * (t - s->ta));
         *vv = s->dir * s->vp;
         *aa = 0.0f;
-    } else {
+    } else {                                              //减速段
         float u = s->t_all - t;
         scurve_shape(s, u, &ps, &vs, &as);
         *pp = s->p0 + s->delta - s->dir * ps;
@@ -129,7 +136,7 @@ static void scurve_eval_at(const scurve_t *s, float t, float *pp, float *vv, flo
  */
 static int scurve_plan(scurve_t *s, uint32_t tick, float p_start, float delta)
 {
-    float vmax = s->vmax;
+    float vmax = s->vmax;                             //约束
     float amax = s->amax;
     float jmax = s->jmax;
     float D    = fabsf(delta);
@@ -278,7 +285,7 @@ void scurve_hold(void)
     s->state = SCURVE_DONE;             /* 保持在当前规划位置 */
 }
 
-void scurve_isr_tick(void)
+void scurve_isr_tick(void)                  //20khz每拍唯一的入口
 {
     scurve_t *s = &g_sc;
 

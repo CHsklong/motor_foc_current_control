@@ -116,6 +116,17 @@ static void position_loop_pre(void)                             /*S 曲线轨迹
 
     /* 前馈 + 修正，再按"规划速度 + 修正权限"做总限幅 */
     s_v_cmd = s_corr_lp + g_sc.v + SCURVE_ACC_FF_TAU * g_sc.a;
+
+    /* 非有限值兜底：NaN/Inf 与任何数的比较都为假，下面的限幅会原样把它放过去，
+       一路穿透到速度环→电流环→PWM 比较值，表现就是"上电偶发过流"。
+       这里先判掉并强制 0（保持静止），同时计数，便于定位是哪个分量先出现的。 */
+    if ((s_v_cmd != s_v_cmd) || (s_v_cmd > 1.0e30f) || (s_v_cmd < -1.0e30f))
+    {
+        s_v_cmd = 0.0f;
+        s_corr_lp = 0.0f;               /* 修正器状态也要清掉，否则 NaN 会永久粘住 */
+        g_sc_nan++;
+    }
+
     if (s_v_cmd >  SCURVE_V_CMD_MAX) { s_v_cmd =  SCURVE_V_CMD_MAX; }
     if (s_v_cmd < -SCURVE_V_CMD_MAX) { s_v_cmd = -SCURVE_V_CMD_MAX; }
 
@@ -154,6 +165,7 @@ static void position_loop_post(void)
     g_ref_speed    = s_v_cmd;
 
     /* ---- S 曲线探针（4kHz 刷新，J-Scope 直接看规划器在干什么）---- */
+    g_sc_tick    = g_sc.tick;           /* 中断喂拍镜像：不涨说明 scurve_isr_tick() 没被调用 */
     g_sc_t       = scurve_elapsed();
     g_sc_v_ref   = g_sc.v;
     g_sc_a_ref   = g_sc.a;
@@ -428,11 +440,9 @@ void isr_adc(void)
         hpm_mcl_analog_get_value(&motor0.analog, analog_a_current, &g_ia);
         hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    /* 实际采样为 C 相 */
         g_ic = -g_ia - g_ib;
-        speed_rad_s = motor0.encoder.result.speed;                    /* 机械角速度 rad/s */
-        rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI);  /* 转/分钟 */
+        speed_rad_s = motor0.encoder.result.speed;                            /* 机械角速度 rad/s */
+        rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI);          /* 转/分钟 */
 
-        /* 实际机械角速度探针：必须在 20kHz 里刷新，否则 J-Scope HSS 采到的是冻结值 */
-        g_spd_fdb = motor0.encoder.result.speed;
 
         if (SVPWM_MODE) 
         {
