@@ -316,3 +316,269 @@ float scurve_elapsed(void)
     }
     return (float)(g_sc.tick - g_sc.t0) * g_sc.ts;
 }
+
+/* ============================================================================
+ * 速度域 S 曲线（jerk 受限速度斜坡）—— 实现
+ * 说明与公式推导见 traj_s_curve.h 尾部
+ * ========================================================================== */
+
+/** 小于这个速度变化量就认为"已经到位"，直接置位不做规划 rad/s */
+#define SCURVE_SPD_MIN_DV   (1.0e-4f)
+
+scurve_spd_t g_scs;
+
+/* 单段规划的内部实现（scurve_spd_move / set_accel / isr_tick 换向衔接都要用） */
+static int spd_plan(float v_start, float v_target);
+
+void scurve_spd_init(float ts, float amax_acc, float amax_dec, float jmax, float vmax)
+{
+    scurve_spd_t *s = &g_scs;
+
+    s->ts       = ts;
+    s->amax_acc = amax_acc;
+    s->amax_dec = amax_dec;
+    s->amax     = amax_acc;             /* 本段生效值：reset 后先按加速限值算 */
+    s->jmax     = jmax;
+    s->vmax     = vmax;
+    s->tick     = 0U;
+    s->move_cnt = 0U;
+    s->stage2   = 0U;
+    s->v_final  = 0.0f;
+    scurve_spd_reset(0.0f);
+}
+
+void scurve_spd_reset(float v_now)
+{
+    scurve_spd_t *s = &g_scs;
+
+    s->v0    = v_now;
+    s->dv    = 0.0f;
+    s->dir   = 1.0f;
+    s->tj    = 0.0f;
+    s->tc    = 0.0f;
+    s->ta    = 0.0f;
+    s->ap    = 0.0f;
+    s->state = SCURVE_IDLE;
+    s->stage2 = 0U;
+    s->v_final = v_now;
+    s->v     = v_now;
+    s->a     = 0.0f;
+    s->j     = 0.0f;
+}
+
+void scurve_spd_set_accel(float a_acc, float a_dec)
+{
+    scurve_spd_t *s = &g_scs;
+
+    /* 非法值一律拒绝：非正会让 d_reach<=0 把段长算成 0/负，
+       NaN 会穿透后面所有比较一路带到电流环。保持原约束是最省事的安全行为。 */
+    if (!(a_acc > 0.0f) || !(a_acc < 1.0e30f)) { return; }
+    if (!(a_dec > 0.0f) || !(a_dec < 1.0e30f)) { return; }
+
+    s->amax_acc = a_acc;
+    s->amax_dec = a_dec;
+
+    /* 斜坡正在跑：以【当前给定】为新起点、按新限值重新规划剩下的行程。
+       终点仍是本次 move 的最终目标（跨零换向时是第二段的 v_final），
+       所以只是把剩余那段重新拉长/缩短，速度本身连续，不会跳变。 */
+    if (s->state == SCURVE_RUN)
+    {
+        float v_end = (s->stage2 != 0U) ? 0.0f : s->v_final;
+        (void)spd_plan(s->v, v_end);
+    }
+    else if (s->state == SCURVE_DONE)
+    {
+        s->amax = (fabsf(s->v_final) > fabsf(s->v)) ? s->amax_acc : s->amax_dec;
+    }
+}
+
+/** 内部：以 v_start 为起点、v_target 为终点启动一段 jerk 受限斜坡
+ *
+ *  本段生效的 amax 按【速度幅值】选取（不是按 dv 的符号）：
+ *    |v_target| > |v_start| → 幅值变大 → amax_acc
+ *    |v_target| < |v_start| → 幅值变小 → amax_dec
+ *  这样"升速命令走 SET_ACCEL、降速/停机走 SET_DECEL"与上位机语义一致，
+ *  而反向启动（0 → -15）这种 dv<0 但幅值变大的情形也归到 ACC，符合直觉。
+ */
+static int spd_plan(float v_start, float v_target)
+{
+    scurve_spd_t *s = &g_scs;
+    float dv = v_target - v_start;
+    float D  = fabsf(dv);
+    float amax, d_reach;
+
+    if ((v_target != v_target) || (v_target > 1.0e30f) || (v_target < -1.0e30f))
+    {
+        return -2;                      /* NaN / Inf */
+    }
+    if ((s->amax_acc <= 0.0f) || (s->amax_dec <= 0.0f) || (s->jmax <= 0.0f))
+    {
+        return -2;
+    }
+
+    /* 目标速度限幅：上限由 scurve_spd_init() 传入（不反向依赖 motor_params.h） */
+    if (v_target >  s->vmax) { v_target =  s->vmax; }
+    if (v_target < -s->vmax) { v_target = -s->vmax; }
+    dv = v_target - v_start;
+    D  = fabsf(dv);
+
+    if (D < SCURVE_SPD_MIN_DV) {        /* 已经在位：直接置位 */
+        s->v     = v_target;
+        s->a     = 0.0f;
+        s->j     = 0.0f;
+        s->state = SCURVE_DONE;
+        if (s->stage2 != 0U)            /* 换向第一段退化成"已在 0"：直接接第二段 */
+        {
+            s->stage2 = 0U;
+            return spd_plan(s->v, s->v_final);
+        }
+        return 0;
+    }
+
+    amax    = (fabsf(v_target) > fabsf(v_start)) ? s->amax_acc : s->amax_dec;
+    d_reach = (amax * amax) / s->jmax;
+
+    s->v0    = v_start;
+    s->dv    = dv;
+    s->dir   = (dv >= 0.0f) ? 1.0f : -1.0f;
+    s->amax  = amax;
+
+    if (D >= d_reach) {
+        /* 加速度梯形：峰值加速度顶到 amax，中间有一段匀加速 */
+        s->ap = amax;
+        s->tj = amax / s->jmax;
+        s->tc = (D - d_reach) / amax;
+    } else {
+        /* 加速度三角形：Δv = ap^2/jmax => ap = sqrt(Δv*jmax)，无匀加速段 */
+        s->ap = sqrtf(D * s->jmax);
+        s->tj = sqrtf(D / s->jmax);
+        s->tc = 0.0f;
+    }
+
+    s->ta    = 2.0f * s->tj + s->tc;
+    s->t0    = s->tick;
+    s->state = SCURVE_RUN;
+
+    return 0;
+}
+
+int scurve_spd_move(float v_target)
+{
+    scurve_spd_t *s = &g_scs;
+    float v_start = s->v;               /* 以当前给定为起点：支持斜坡中途改目标 */
+
+    if ((v_target != v_target) || (v_target > 1.0e30f) || (v_target < -1.0e30f))
+    {
+        return -2;                      /* NaN / Inf */
+    }
+    if ((s->amax_acc <= 0.0f) || (s->amax_dec <= 0.0f) || (s->jmax <= 0.0f))
+    {
+        return -2;
+    }
+
+    /* 目标速度限幅：上限由 scurve_spd_init() 传入（不反向依赖 motor_params.h） */
+    if (v_target >  s->vmax) { v_target =  s->vmax; }
+    if (v_target < -s->vmax) { v_target = -s->vmax; }
+
+    s->v_final = v_target;
+    s->move_cnt++;
+
+    /* 跨零换向（v_start 与 v_target 反号，且两端都离 0 足够远）：
+       拆两段 —— 先按 amax_dec 减到 0，再按 amax_acc 反向升到目标。
+       整段共用一个 amax 时"前半刹车、后半反向加速"没法同时满足两个限值。 */
+    if ((v_start * v_target < 0.0f)
+        && (fabsf(v_start)  > SCURVE_SPD_MIN_DV)
+        && (fabsf(v_target) > SCURVE_SPD_MIN_DV))
+    {
+        s->stage2 = 1U;
+        return spd_plan(v_start, 0.0f);
+    }
+
+    s->stage2 = 0U;
+    return spd_plan(v_start, v_target);
+}
+
+void scurve_spd_hold(void)
+{
+    scurve_spd_t *s = &g_scs;
+
+    s->ta      = 0.0f;                  /* 本斜坡作废，保持当前给定 */
+    s->state   = SCURVE_DONE;
+    s->a       = 0.0f;
+    s->j       = 0.0f;
+    s->stage2  = 0U;                    /* 换向第二段一并取消 */
+    s->v_final = s->v;
+    /* s->v 保持不动：就地保持当前速度 */
+}
+
+void scurve_spd_isr_tick(void)              //20khz每拍唯一的入口
+{
+    scurve_spd_t *s = &g_scs;
+    float t;
+
+    s->tick++;
+
+    if (s->state != SCURVE_RUN) 
+    {
+        return;                             /* IDLE / DONE：保持当前速度给定 */
+    }
+
+    t = (float)(s->tick - s->t0) * s->ts;
+
+    if (t <= 0.0f) 
+    {
+        s->a = 0.0f;
+        s->j = 0.0f;
+        return;
+    }
+
+    if (t >= s->ta) {                       /* 收尾对齐，消除浮点残差 */
+        s->v     = s->v0 + s->dv;
+        s->a     = 0.0f;
+        s->j     = 0.0f;
+        s->state = SCURVE_DONE;
+
+        /* 跨零换向：第一段（减到 0）刚走完 → 立刻接第二段（0 → v_final）。
+           衔接点在 20kHz 里，速度连续、中间不停顿；第二段按 amax_acc 规划。
+           这里会走到 spd_plan() 里的 sqrtf —— 只在换向那一刻执行一次，
+           不是每拍开销；常态路径（①②③ 三段求值）仍然是纯乘加。 */
+        if (s->stage2 != 0U)
+        {
+            s->stage2 = 0U;
+            (void)spd_plan(s->v, s->v_final);
+        }
+        return;
+    }
+
+    if (t < s->tj) 
+    {
+        /* ① 加加速：jerk = +jmax，a = jmax*t，Δv = 1/2*jmax*t^2 */
+        s->j =  s->dir * s->jmax;
+        s->a =  s->dir * s->jmax * t;
+        s->v =  s->v0 + s->dir * 0.5f * s->jmax * t * t;
+    } else if (t < (s->tj + s->tc)) 
+    {
+        /* ② 匀加速：a 恒为 ap，Δv = d1 + ap*(t-tj) */
+        float d1 = 0.5f * s->jmax * s->tj * s->tj;      /* = 0.5*ap*tj */
+        s->j = 0.0f;
+        s->a = s->dir * s->ap;
+        s->v = s->v0 + s->dir * (d1 + s->ap * (t - s->tj));
+    } else 
+    {
+        /* ③ 减加速：用"剩余时间 u"倒扣，与加速段对称 */
+        float u  = s->ta - t;                            /* u: tj -> 0 */
+        s->j = -s->dir * s->jmax;
+        s->a =  s->dir * s->jmax * u;
+        s->v = (s->v0 + s->dv) - s->dir * 0.5f * s->jmax * u * u;
+    }
+}
+
+uint8_t scurve_spd_is_idle(void)
+{
+    return (g_scs.state == SCURVE_RUN) ? 0U : 1U;
+}
+
+float scurve_spd_out(void)
+{
+    return g_scs.v;
+}

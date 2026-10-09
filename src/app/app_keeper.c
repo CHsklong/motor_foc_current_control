@@ -19,16 +19,11 @@
  *   ② PWM 输出被软件关断（detect 的 disable_output）→ 自动恢复
  *   ③ 控制环 status=fail → 软重启一次
  * 外加一次上电母线电压复核修正。
- *
- * 【为什么不无条件自愈】单纯的 PWM 锁存清掉就没事了；但如果 MCL 已经判定
- * 过真实故障（g_fault_src 非 0），说明采样/驱动/编码器里确有问题，
- * 这时反复使能输出可能直接烧功率级。所以这里只在 g_fault_src==0 时动作，
- * 否则只记录 g_keeper_blocked 并保持停机。
  */
 
 #if RUN_KEEPER_ENABLE
 
-/** 自愈动作原因码（写进 g_keeper_last_cause，便于 J-Scope 分辨发生了什么） */
+/** J-Scope 变量表，判断当前自愈动作） */
 enum {
     KEEPER_CAUSE_NONE        = 0,
     KEEPER_CAUSE_FAULT_CLR   = 1,   /* 清掉了 PWM 硬件故障锁存 */
@@ -37,7 +32,7 @@ enum {
     KEEPER_CAUSE_VBUS_FIX    = 4    /* 修正了偏低的母线电压 */
 };
 
-static uint32_t s_tick_ms;          /* 当前毫秒时刻（取真实时基 g_sys_ms，见下） */
+static uint32_t s_tick_ms;          /* 当前毫秒时刻 */
 static uint32_t s_cooldown_until;   /* 冷却结束时刻 */
 static uint32_t s_action_cnt;       /* 已执行的自愈动作总数 */
 static uint8_t  s_vbus_checked;     /* 母线电压复核是否已做过 */
@@ -52,17 +47,14 @@ static uint8_t  s_soft_retry_done;  /* 上电窗口内的软恢复机会是否�
 /** 是否还有自愈额度：超额后彻底停机，防止在无人在场时反复重启 */
 static bool s_budget_left(void)
 {
-    if (KEEPER_MAX_ACTION == 0U) {
+    if (KEEPER_MAX_ACTION == 0U) 
+    {
         return true;
     }
     return (s_action_cnt < (uint32_t)KEEPER_MAX_ACTION);
 }
 
 /**
- * @brief 安全门槛：什么时候允许自愈
- * @retval true 可以动作
- *
- * 规则：
  *   1) MCL 从未判过故障（g_fault_src==0）→ 允许（上电毛刺误锁的常见情形）；
  *   2) 判过故障，但只涉及 环路/编码器，且还在上电窗口内 → 允许【一次】。
  *      冷上电时 MT6835 没完成 POR、PLL 没锁好，detect 很容易上来就判 encoder/loop fail
@@ -71,22 +63,28 @@ static bool s_budget_left(void)
  */
 static bool s_safe_to_recover(void)
 {
-    if (!s_budget_left()) {
+    if (!s_budget_left()) 
+    {
         return false;
     }
-    if (g_fault_src == 0U) {
+    if (g_fault_src == 0U) 
+    {
         return true;
     }
-    if ((g_fault_src & KEEPER_HARD_SRC_MASK) != 0U) {
+    if ((g_fault_src & KEEPER_HARD_SRC_MASK) != 0U) 
+    {
         return false;
     }
-    if ((g_fault_src & KEEPER_SOFT_SRC_MASK) == 0U) {
+    if ((g_fault_src & KEEPER_SOFT_SRC_MASK) == 0U) 
+    {
         return false;
     }
-    if (s_soft_retry_done != 0U) {
+    if (s_soft_retry_done != 0U) 
+    {
         return false;
     }
-    if (s_tick_ms > (uint32_t)KEEPER_BOOT_WINDOW_MS) {
+    if (s_tick_ms > (uint32_t)KEEPER_BOOT_WINDOW_MS) 
+    {
         return false;
     }
     s_soft_retry_done = 1U;
@@ -95,8 +93,7 @@ static bool s_safe_to_recover(void)
 
 void app_keeper_update(void)
 {
-    /* 取真实毫秒时基，而不是"被调用了多少次"：
-       主循环正常时约 1kHz；一旦 main 被 20kHz 中断饿死，本函数改由节拍 ISR 代跑
+    /* 取真实毫秒时基，主循环正常时约 1kHz；一旦 main 被 20kHz 中断饿死，本函数改由节拍 ISR 代跑
        （见 ctrl_set_keeper_hook），调用频率变成 50Hz，按次数计时会整体失真。 */
     s_tick_ms = g_sys_ms;
 
@@ -152,7 +149,7 @@ void app_keeper_update(void)
     }
 #endif
 
-    /* ---- ② 输出被软件关断（detect 的 disable_output 走过） ---- */
+    /* ---- ② 输出被软件关断 ---- */
 #if KEEPER_OUT_AUTO_REC
     if (!pwm_output_is_enabled())
     {
@@ -196,4 +193,4 @@ void app_keeper_update(void)
     /* 监护关闭：什么都不做 */
 }
 
-#endif /* RUN_KEEPER_ENABLE */
+#endif 

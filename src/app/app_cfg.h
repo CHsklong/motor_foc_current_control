@@ -18,10 +18,11 @@
 #define SVPWM_MODE        0    /* 开环 SVPWM 拖动（不带反馈，用于验证功率级） */
 #define FOC_MODE          1    /* FOC 闭环总开关（下面的模式依赖它） */
 #define FOC_CURRENT_MODE  0    /* 电流环：直接给 id/iq */
-#define FOC_SPEED_MODE    0    /* 速度环：给机械角速度 rad/s */
-#define FOC_POSITION_MODE 1    /* 位置环：给相对基准的位置增量 rad */
+#define FOC_SPEED_MODE    1    /* 速度环：给机械角速度 rad/s */
+#define FOC_POSITION_MODE 0    /* 位置环：给相对基准的位置增量 rad */
 
 /**
+ * 位置S型曲线
  * S 型加减速（jerk 受限）轨迹规划开关
  *
  * 1=位置给定由 S 曲线规划器逐拍生成，外环改为"速度前馈 + P/PI 修正"；
@@ -32,6 +33,21 @@
  * 参数（vmax / amax / jmax / 前馈系数 / 修正权限）全部在 motor_params.h 末尾。
  */
 #define SCURVE_ENABLE     1
+
+/**
+ * 速度 S 曲线（速度域 jerk 受限斜坡）开关
+ *
+ * 1=速度模式下，"目标速度 → 速度给定"之间插一条 S 形斜坡：
+ *    CAN 0x101 的目标速度和 main() 里的常量都不再阶跃，而是按
+ *    SCURVE_AMAX(加速度上限) / SCURVE_SPD_JMAX(jerk 上限) 平滑过渡过去。
+ *    斜坡挂在"目标速度 → 速度给定"这一个点上，所以两个命令源自动都生效。
+ * 0=目标速度直接阶跃给速度环（原有行为），用于对比。
+ *
+ * 只在 FOC_SPEED_MODE=1 时参与编译，与位置 S 曲线（SCURVE_ENABLE）互不干扰：
+ * 当前分支 FOC_POSITION_MODE=1，本开关不产生任何代码，位置 S 曲线调试不受影响。
+ * 要跑速度 S 曲线时：把 app_cfg.h 改成 FOC_POSITION_MODE=0 / FOC_SPEED_MODE=1 即可。
+ */
+#define SCURVE_SPD_ENABLE 1
 
 #if (FOC_CURRENT_MODE + FOC_SPEED_MODE + FOC_POSITION_MODE) > 1
 #error "FOC_CURRENT_MODE / FOC_SPEED_MODE / FOC_POSITION_MODE 同时只能有一个为 1"
@@ -92,6 +108,16 @@
 #define KEEPER_COOLDOWN_MS    (500)   /* 两次自愈动作之间的最小间隔 ms */
 #define KEEPER_MAX_ACTION     (8)     /* 自愈总次数上限，超过后停机待查；0=不限 */
 
+/* ---------------- 只读编码器演示模式（手拧转子写字用） ----------------
+ * 需求：只把编码器角度/速度经 CAN 送出来，**不使能闭环、不输出 PWM**，电机完全无力矩，
+ *       手可以自由拧动转子。*/
+#define ENCODER_ONLY_DEMO    0       /*  0：正常上电使能闭环，PWM 由 CAN 的 CMD_DISABLE 关断
+                                        1（全程不使能闭环）时：没使能时板子会静默停摆。 */
+
+/* 手拧演示必须关掉运行监护。这里无条件关掉，与 ENCODER_ONLY_DEMO 无关。 */
+#undef  RUN_KEEPER_ENABLE
+#define RUN_KEEPER_ENABLE    0
+
 /* 主循环停滞兜底：main 被 20kHz 中断饿死时怎么办
  *
  * 1=停滞超过 60ms 后，每 4 拍跳过 1 拍完整控制计算，强制给 main 留出时间片，
@@ -119,12 +145,18 @@
  *        然后改回 0 重新烧录。调试器下载不擦末尾 sector，参数会保留。 */
 #define FLASH_PARAM_CALIB_ONCE   0
 
-/* ---------------- CAN 通信（MCAN0 / CANalyst-II / CANTest，500kbps） ----------------
- * 1=使能：100ms 周期遥测(0x201)，接收速度/位置命令(0x101/0x102)与连通性测试(0x100)。
+/* ---------------- CAN 通信（MCAN0 / E249 上位机，500kbps） ----------------
+ * 1=使能：走 E249_CAN控制协议 v0.2（见 can/can_protocol.h 与协议 xlsx）。
+ *   RX 0x201 控制(心跳/选模式/使能/停止/禁用/清故障)   RX 0x221 运动(速度/位置/点动)
+ *   TX 0x181 ACK   TX 0x281 快速状态(20ms)   TX 0x301 慢速状态(100ms)
  *   使能后 main 循环里的阶跃自动测试块(step_response_s/p)不再自动跑，电机由 CAN 命令控制；
  *   PA00/PA01 会被配成 CAN 引脚（与 UART0 控制台复用，printf 失效，调试走 J-Scope）。
- * 0=关闭：恢复原阶跃测试逻辑与串口控制台。协议表见 can/can_app.c 文件头。 */
-#define CAN_CTRL_ENABLE   0
+ * 0=关闭：恢复原阶跃测试逻辑与串口控制台。
+ *
+ * ⚠️ 旧自定协议（板->PC 0x201 遥测、PC->板 0x101 速度 / 0x102 位置增量）已废弃删除：
+ *    0x201 在新协议里是【上位机->板】的控制帧，方向相反，两者不能共存。
+ *    速度命令改用 0x221 cmd=0x01 SET_SPEED（单位 0.001 rpm，注意不再是 0.1 rad/s）。 */
+#define CAN_CTRL_ENABLE   1
 
 /* CAN 波特率（kHz）：必须与 CANTest 里设置的完全一致。
  * 板上 U5(SN65HVD234) 的 RS 脚接了 R26=47K（斜率控制模式），压摆率约 4~6V/us，
@@ -139,7 +171,7 @@
 #define motor_ban         0   /* 闭环静止模式 */
 #define step_response_c   0   /* 电流环阶跃响应测试 */
 #define step_response_s   0   /* 速度环阶跃响应测试（CAN_CTRL_ENABLE=1 时不自动跑） */
-#define step_response_p   1   /* 位置环 S 曲线运动测试（CAN_CTRL_ENABLE=1 时不自动跑） */
+#define step_response_p   0   /* 位置环 S 曲线运动测试（CAN_CTRL_ENABLE=1 时不自动跑） */
 
 /** S 曲线测试的运动方式（仅 step_response_p=1 且 SCURVE_ENABLE=1 时有效）
  *
@@ -147,11 +179,7 @@
  *   用于换向/耐久测试。J-Scope 上 g_sc_move_cnt 持续递增、g_pos_ref 在 0↔±D 之间来回。
  * 0=单向单次（默认）：只走 POS_TARGET_DELTA 一次，完成后位置环把终点保持住。
  *   用于观察一条完整的 S 曲线：g_sc_v_ref 是一个完整梯形、g_sc_a_ref 分段恒定、
- *   g_pos_ref 是一段三次曲线。判据：g_sc_move_cnt 恒为 1、g_sc_state 最后停在 DONE(2)。
- *   起点 = encoder_abs_rebase() 建立的 0 基准，所以终点恰为 +POS_TARGET_DELTA。
- *
- * 注：起始的第一次运动要等 SCURVE_DWELL_MS 之后才发（sc_dwell 初值即该值），
- *     这段 800ms 是留给你把 J-Scope 采样跑起来的窗口。 */
+ */
 #define SCURVE_REPEAT_ENABLE  0
 
 

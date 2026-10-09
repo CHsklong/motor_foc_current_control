@@ -66,7 +66,17 @@ static hpm_mcl_stat_t speed_pi_anti_windup(hpm_mcl_type_t ref, hpm_mcl_type_t se
     pid_x->integral += pid_x->cfg.ki * err;
     MCL_VALUE_LIMIT(pid_x->integral, pid_x->cfg.integral_min, pid_x->cfg.integral_max);
 
-    out_unsat = pid_x->cfg.kp * err + pid_x->integral;
+    /* ---- 摩擦前馈 ---- */
+    {
+        float v_abs = ((float)ref >= 0.0f) ? (float)ref : -(float)ref;
+        float sgn   = (float)ref / (v_abs + FRIC_FF_V_EPS);
+        g_iq_ff = (FRIC_TC_NM + FRIC_B_NMS * v_abs) * sgn / MOTOR_KT_NM_PER_A;
+    }
+
+    /* 前馈并入 out_unsat（而不是事后加在 out 上）：这样一旦被 output_max 限幅，
+     * 下面的 back-calculation 会同时把"前馈顶出去的那部分"从积分里扣掉，
+     * 不会出现"前馈 + 积分双重顶饱和"的隐性 windup。 */
+    out_unsat = pid_x->cfg.kp * err + pid_x->integral + g_iq_ff;
 
     if (out_unsat > pid_x->cfg.output_max) {
         out = pid_x->cfg.output_max;
@@ -123,7 +133,7 @@ void motor_init(void)
     motor0.cfg.mcl.physical.motor.lq =  0.00127f;
     motor0.cfg.mcl.physical.time.adc_sample_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);
     motor0.cfg.mcl.physical.time.current_loop_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);
-    motor0.cfg.mcl.physical.time.encoder_process_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY);
+    motor0.cfg.mcl.physical.time.encoder_process_ts = MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY)* 5;
     motor0.cfg.mcl.physical.time.speed_loop_ts = (MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY)) * 5;
     motor0.cfg.mcl.physical.time.position_loop_ts = (MCL_FREQUENCY_TO_PERIOD(PWM_FREQUENCY)) * 20;
     motor0.cfg.mcl.physical.time.mcu_clock_tick = clock_get_frequency(clock_cpu0);
@@ -211,13 +221,6 @@ void motor_init(void)
     motor0.cfg.control.speed_pid_cfg.cfg.kp = BOARD_BLDC_HW_FOC_SPEED_KP;
     motor0.cfg.control.speed_pid_cfg.cfg.ki = BOARD_BLDC_HW_FOC_SPEED_KI;
 #else
-    /* 限幅（2026-09-11 收紧）：
-     * output_max 原为 5A，但 physical.motor.i_max = 3A —— 速度环可以要到 5A，
-     * 直接顶到过流保护阈值，起转瞬间会被 detect 打断。
-     * integral_max 原为 100，而 MCL 的 hpm_mcl_control_pi() 没有抗饱和：
-     * 输出被 output_max 削掉后积分仍在累加，最多能攒到 100，退饱和要几十秒，
-     * 表现为起转时"猛冲一下"然后长时间回不来。把积分限幅压到和输出限幅一致，
-     * 是最省事的抗饱和办法。 */
     motor0.cfg.control.speed_pid_cfg.cfg.integral_max = 3;
     motor0.cfg.control.speed_pid_cfg.cfg.integral_min = -3;
     motor0.cfg.control.speed_pid_cfg.cfg.output_max = 3;

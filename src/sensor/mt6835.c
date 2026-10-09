@@ -19,7 +19,8 @@ hpm_stat_t mt6835_read_byte(uint16_t reg_addr, uint8_t *data)
     };
     uint8_t rx_buf[3] = {0};
 
-    if (spi_transfer(HPM_SPI1, &g_spi_ctrl_cfg, NULL, NULL, tx_buf, 3, rx_buf, 3) != status_success) {
+    if (spi_transfer(HPM_SPI1, &g_spi_ctrl_cfg, NULL, NULL, tx_buf, 3, rx_buf, 3) != status_success) 
+    {
         g_spi_err = 3;
         return status_fail;
     }
@@ -39,18 +40,20 @@ hpm_stat_t mt6835_read_byte(uint16_t reg_addr, uint8_t *data)
  * 上电自检不通过会自动回退到三次单字节读，见 mt6835_seq3_init()。 */
 hpm_stat_t mt6835_read_angle_seq3(uint8_t b[3])
 {
-    uint8_t tx[5] = {
+    uint8_t tx[5] = 
+    {
         (uint8_t)((MT6835_CMD_READ_REG << 4) | ((MT6835_REG_ANGLE_MSB >> 8) & 0x0F)),
         (uint8_t)(MT6835_REG_ANGLE_MSB & 0xFF),
         0, 0, 0                        /* 3 个空字节把 0x003/0x004/0x005 时钟出来 */
     };
     uint8_t rx[5] = {0};
-
-    if (spi_transfer(HPM_SPI1, &g_spi_ctrl_cfg, NULL, NULL, tx, 5, rx, 5) != status_success) {
+    if (spi_transfer(HPM_SPI1, &g_spi_ctrl_cfg, NULL, NULL, tx, 5, rx, 5) != status_success) 
+    {
         return status_fail;
     }
     /* 全 0 = 芯片没应答；全 0xFF = MISO 仍高阻（地址未自增，后续字节无效） */
-    if (((rx[2] | rx[3] | rx[4]) == 0) || ((rx[2] & rx[3] & rx[4]) == 0xFF)) {
+    if (((rx[2] | rx[3] | rx[4]) == 0) || ((rx[2] & rx[3] & rx[4]) == 0xFF)) 
+    {
         return status_fail;
     }
     b[0] = rx[2];

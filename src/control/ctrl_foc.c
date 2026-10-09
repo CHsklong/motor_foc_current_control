@@ -14,6 +14,7 @@
 #include "traj_s_curve.h"
 #include "hpm_mcl_control.h"
 #include "dbg_probe.h"
+#include "motor_scope.h"     /* motor_scope_isr_tick：20kHz 里刷新录波通道并采样 */
 #include "app_cfg.h"
 #include <math.h>
 
@@ -25,37 +26,7 @@ float rpm;          /* 转/分钟 */
 float fault_level;
 
 #if FOC_POSITION_MODE && SCURVE_ENABLE
-/* ==================== S 曲线规划 + 位置外环（前馈 + 修正） ====================
- *
- * 【为什么必须换成前馈结构】
- * 原来那套"接近限速"是靠误差反推速度上限：vlim = sqrt(2*POS_DECEL_MAX*|err|)。
- * 阶跃给定时 err 很大，vlim 一上来就被 output_max 夹住 → 全速跑；
- * err 变小 vlim 自然收紧 —— 这本身就是一条粗糙的减速曲线，所以能跑通。
- * 但换成 S 曲线后 err 天生很小（参考本来就在缓慢移动），
- * sqrt(2*150*err) 会反过来把速度给定掐死在几 rad/s，规划器形同虚设。
- * 所以 S 曲线模式下速度给定改为：
- *
- *   v_cmd = S 曲线速度前馈 v_ff          （主体，运动学可行性由规划器保证）
- *         + 加速度前馈 SCURVE_ACC_FF_TAU * a_ff   （补速度环的一阶滞后）
- *         + 位置外环 P/PI 修正 out       （只补模型误差与扰动）
- *
- * 修正器输出限幅从 30rad/s 收到 POS_CORR_MAX：它的职责是"修正"不是"驱动"，
- * 这样即便前馈算错，电机也不会跑飞。
- *
- * 【为什么关掉 MCL 自带的位置环】
- * MCL 的 position_pid 输出直接写进 exec_ref.speed，中间没有前馈注入点；
- * 而 ref_speed 一旦 enable 又会整体覆盖 exec_ref.speed（不是叠加）。
- * 所以本模式下 main() 会把 enable_position_loop 置 false，改由这里按 4kHz
- * 自己调 hpm_mcl_position_pid()，加完前馈再用 hpm_mcl_loop_set_speed() 下发。
- * 副作用：MCL 不再替我们调 encoder_get_abs_theta()，这里自己调（同为 4kHz，
- * SPI 开销与原来一致）。
- *
- * 【POS_LOOP_DIV 必须是 5 而不是 20】
- * hpm_mcl_loop_init() 里有一处指针别名：
- *     loop->const_time.position_ts = &mcl_cfg->physical.time.speed_loop_ts;
- * 即 MCL 的位置环实际跑在 speed_loop_ts(250us, 4kHz) 上，不是 position_loop_ts(1ms)。
- * 位置环 ki 是按 Ts=2.5e-4 整定的，这里必须保持 5 分频，否则等效积分增益差 4 倍。
- */
+/* ==================== S 曲线规划 + 位置外环（前馈 + 修正） ==================== */
 static uint8_t s_pos_decim;          /* 20kHz -> 4kHz 分频计数 */
 static float   s_v_cmd;              /* 本拍最终速度给定 rad/s */
 static float   s_corr;               /* 本拍位置外环修正量（原始值）rad/s */
@@ -70,7 +41,7 @@ static void position_loop_pre(void)                             /*S 曲线轨迹
     mcl_user_value_t   cmd;
     float pos_fb, err, out;
 
-    /* ---- 1) 位置参考 = S 曲线输出（取代原来的阶跃给定）---- */
+    /* ---- 1) 位置参考 = S 曲线输出---- */
     g_pos_ref = g_sc.p;
 
     /* ---- 2) 位置外环 4kHz ---- */
@@ -163,7 +134,6 @@ static void position_loop_post(void)
 
     g_pos_integral = p->integral;
     g_ref_speed    = s_v_cmd;
-
     /* ---- S 曲线探针（4kHz 刷新，J-Scope 直接看规划器在干什么）---- */
     g_sc_tick    = g_sc.tick;           /* 中断喂拍镜像：不涨说明 scurve_isr_tick() 没被调用 */
     g_sc_t       = scurve_elapsed();
@@ -299,7 +269,7 @@ static uint32_t isr_cycles_per_us(void)
  *   ② 停滞接管：每 20ms 检查 main 心跳还推不推进；不推进就由本 ISR 代跑
  *      运行监护（解除 PWM 锁存、恢复输出仍有机会执行），不再依赖 main。
  *   ③ 应急让路：连续 3 个窗口（60ms）仍停滞 → 每 4 拍跳过 1 次控制计算，
- *      强行给 main 留出时间片，打破"越饿死越没人救"的死锁；main 恢复即退出。
+ *      强行给 main 留出时间片。
  */
 #define ISR_WINDOW_TICKS   (PWM_FREQUENCY / 50U)   /* 20ms 一个统计窗口 */
 #define ISR_RELIEF_DIV     (4U)                    /* 让路模式：每 4 拍跳过 1 拍 */
@@ -356,7 +326,7 @@ static void isr_window_update(uint32_t dt, uint32_t budget)
     s_win_enc_max   = 0U;
     s_win_loop_max  = 0U;
 
-    /* ---- 主循环还活着吗 ---- */
+    /* ---- 判断主循环是否正常 ---- */
     if (g_heart_main != s_hm_last)
     {
         s_hm_last   = g_heart_main;
@@ -406,6 +376,38 @@ static void isr_timed_end(uint32_t t0)
     isr_window_update(dt, budget);
 }
 
+#if FOC_SPEED_MODE && SCURVE_SPD_ENABLE
+/* ============ 速度 S 曲线：把规划器输出下发给速度环 ============
+ *
+ * 与位置模式的前馈结构不同：速度模式没有位置外环，速度给定直接由规划器出，
+ * 所以这里只做一件事 —— 把 scurve_spd_out() 写进速度环给定
+ * 目标速度（CAN 0x101 / main 里的常量）由 scurve_spd_move() 设定，
+ * 斜坡本身在 20kHz 的 scurve_spd_isr_tick() 里推进。
+ * 下发速率取 4kHz（POS_LOOP_DIV 分频）：与速度环节拍一致，再快没有意义
+ * （速度环本来就 4kHz 才取一次给定），还能省一点中断时间。 */
+static uint8_t s_spd_decim;
+
+static void speed_ramp_pre(void)
+{
+    mcl_user_value_t cmd;
+
+    if (++s_spd_decim < POS_LOOP_DIV) {
+        return;
+    }
+    s_spd_decim = 0;
+
+    cmd.enable = true;              /* 必须 enable，否则速度环会取 exec_ref.speed(=0) */
+    /* 给定 = 斜坡本体 + 加速度前馈 tau*a（补速度环跟踪斜坡的一阶滞后）。 */
+    cmd.value  = scurve_spd_out() + SCURVE_SPD_ACC_FF_TAU * g_scs.a;
+    hpm_mcl_loop_set_speed(&motor0.loop, cmd);
+
+    /* g_ref_speed 统一表示"本拍真正下发给速度环的给定"
+       注意别把它当目标速度看：目标速度在 g_can_spd_cmd，
+       这里赋值的就是 g_scs.v斜坡输出（S 曲线本体）。 */
+    g_ref_speed = cmd.value;
+}
+#endif
+
 void isr_adc(void)
 {
     uint32_t status;
@@ -414,10 +416,33 @@ void isr_adc(void)
 
     g_heart_isr++;   /* 存活心跳：J-Scope 里不递增即说明 20kHz 节拍根本没起来 */
 
+    /* ELF 变量录波：刷新六路通道 + 按分频采样（上位机"ELF 与录波"页的数据源）。
+       只在 ARMED/TRIGGERED 状态下写缓冲，IDLE 时开销是 10 次 volatile 存，可忽略。 */
+    motor_scope_isr_tick();
+
 #if FOC_POSITION_MODE && SCURVE_ENABLE
-    /* S 曲线的时间基准：必须每拍都走，不能被"应急让路"跳拍带偏，
-       否则轨迹时间会相对真实时间变慢。放在中断最前面。 */
     scurve_isr_tick();
+#endif
+
+#if FOC_SPEED_MODE && SCURVE_SPD_ENABLE
+    scurve_spd_isr_tick();      /* 速度域斜坡推进（时间基准必须每拍连续） */
+
+    /* J-scope变量储存 */
+    g_scs_v        = g_scs.v;
+    g_scs_a        = g_scs.a;
+    g_scs_j        = g_scs.j;
+    g_scs_state    = (uint32_t)g_scs.state;
+    g_scs_move_cnt = g_scs.move_cnt;
+    g_scs_tick     = g_scs.tick;
+    g_scs_v0       = g_scs.v0;
+    g_scs_dv       = g_scs.dv;
+    g_scs_ta       = g_scs.ta;
+    /* 加/减速限值与其生效结果：CAN SET_ACCEL / SET_DECEL 有没有落到规划器，看这四个 */
+    g_scs_amax     = g_scs.amax;
+    g_scs_ap       = g_scs.ap;
+    g_scs_lim_acc  = g_scs.amax_acc;
+    g_scs_lim_dec  = g_scs.amax_dec;
+    g_scs_stage2   = (uint32_t)g_scs.stage2;
 #endif
 
     status = hpm_adc_v2_get_status_flags(adc_u);
@@ -441,6 +466,7 @@ void isr_adc(void)
         hpm_mcl_analog_get_value(&motor0.analog, analog_b_current, &g_ib);    /* 实际采样为 C 相 */
         g_ic = -g_ia - g_ib;
         speed_rad_s = motor0.encoder.result.speed;                            /* 机械角速度 rad/s */
+        g_spd_fdb   = speed_rad_s;
         rpm = motor0.encoder.result.speed * 60.0f / (2.0f * MCL_PI);          /* 转/分钟 */
 
 
@@ -467,6 +493,9 @@ void isr_adc(void)
                 uint32_t t_loop = (uint32_t)hpm_csr_get_core_cycle();
         #if FOC_POSITION_MODE
                     position_loop_pre();     /* 位置环：设定本拍动态限幅 */  /* 前馈给定S型曲线的参考输入 */
+        #endif
+        #if FOC_SPEED_MODE && SCURVE_SPD_ENABLE
+                    speed_ramp_pre();        /* 速度 S 曲线：下发本拍速度给定（4kHz） */
         #endif
                     hpm_mcl_loop(&motor0.loop);  /* 电流环 / 速度环 / 位置环 */
         #if FOC_POSITION_MODE

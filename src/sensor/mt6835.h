@@ -18,7 +18,7 @@
 #define MT6835_REG_ANGLE_MSB  0x003 /* 角度高字节 */
 #define MT6835_REG_ANGLE_MID  0x004
 #define MT6835_REG_ANGLE_LSB  0x005
-#define MT6835_REG_USER_ID    0x001 /* 用户 ID 寄存器（可用于通信验证） */
+#define MT6835_REG_USER_ID    0x001 /* 用户 ID 寄存器 */
 
 /** 上电自检的重试次数与间隔
  *

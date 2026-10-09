@@ -9,7 +9,7 @@
 #include "sens_analog.h"
 #include "dbg_probe.h"
 #include "app_monitor.h"
-
+/*jscope监控变量*/
 void app_monitor_update(void)
 {
     /* ADC 原始码值 */
@@ -23,7 +23,7 @@ void app_monitor_update(void)
     /* 位置环积分项,单位是 "rad·拍" ,判断是否抗饱和。 */
     g_pos_integral = motor0.cfg.control.position_pid_cfg.integral;
 
-    /* 故障状态：电机"突然不转"时先看这三个 */
+    /* 故障状态：电机不转时先看这三个 */
     g_loop_status = (uint32_t)motor0.loop.status;      /* 2=run，3=fail */
     g_enc_status  = (uint32_t)motor0.encoder.status;   /* 非 0 即编码器异常 */
     g_ana_status  = (uint32_t)motor0.analog.status;    /* 非 0 即采样异常（含过流） */
